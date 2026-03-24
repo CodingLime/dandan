@@ -7,8 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "selfplay": "node scripts/train-self-play.mjs --games 200 --concurrency 4",
-    "selfplay:fast": "node scripts/train-self-play.mjs --games 1000 --concurrency 8"
+    "rules:check": "node scripts/rules-regression.mjs",
+    "selfplay": "node scripts/train-self-play.mjs --minutes 30 --population 8 --games-per-seat 8 --concurrency 4",
+    "selfplay:fast": "node scripts/train-self-play.mjs --minutes 3 --population 4 --games-per-seat 3 --concurrency 2",
+    "selfplay:boss": "node scripts/train-self-play.mjs --hours 2 --population 10 --games-per-seat 12 --concurrency 6 --hall-of-fame 4"
   },
   "dependencies": {
     "lucide-react": "^0.542.0",

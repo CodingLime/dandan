@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useReducer } from 'react';
-import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, FileText, X, Sun, Moon, Swords, Volume2, VolumeX, Loader2, ArrowLeftRight, Target, Droplet, Shield, CloudRain } from 'lucide-react';
-import { AI_DIFFICULTIES, AI_DIFFICULTY_LABELS, AI_SPEED, CARDS, DANDAN_NAME, PREDICT_OPTIONS, checkHasActions, controlsIsland, createGameReducer, getAvailableMana, getLivePolicyWeights, initialState, isActivatable, isCastable, isValidTarget } from './src/game/engine';
+import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeftRight, Target, Droplet, Shield, CloudRain } from 'lucide-react';
+import { AI_DIFFICULTIES, AI_DIFFICULTY_LABELS, AI_SPEED, CARDS, DANDAN_NAME, PREDICT_OPTIONS, SHARED_DECK_SIZE, checkHasActions, controlsIsland, createGameReducer, getAvailableMana, getLivePolicyWeights, getManaPool, initialState, isActivatable, isCastable, isCyclable, isValidTarget } from './src/game/engine';
 
 // --- ADVANCED AUDIO ENGINE ---
 const AudioEngine = {
@@ -161,6 +161,17 @@ const PhaseTracker = ({ currentPhase, turn }) => {
 
 const randomChoice = (list) => list[Math.floor(Math.random() * list.length)];
 const shouldMakeMistake = (difficulty, rate, policy) => Math.random() < Math.max(rate, policy?.mistakeRate ?? (difficulty === 'easy' ? 0.3 : 0.08));
+const pickAiPendingCards = (hand, count, policy) => {
+  const preferKeepingLands = hand.filter(card => card.isLand).length < Math.ceil(policy.landLimit ?? 4);
+  return [...hand]
+    .sort((a, b) => {
+      const aScore = (a.isLand ? (preferKeepingLands ? 8 : -4) : 0) - a.cost * (policy.control > policy.aggression ? 0.6 : 0.2);
+      const bScore = (b.isLand ? (preferKeepingLands ? 8 : -4) : 0) - b.cost * (policy.control > policy.aggression ? 0.6 : 0.2);
+      return aScore - bScore;
+    })
+    .slice(0, count)
+    .map(card => card.id);
+};
 const getSpellPriority = (card, policy) => {
   switch (card.name) {
     case 'Control Magic': return 6 + policy.control * 4;
@@ -200,6 +211,29 @@ const getHandFanStyle = (index, total, side = 'bottom') => {
   };
 };
 
+const getLandStackRevealRatio = (total) => {
+  if (total <= 1) return 1;
+  if (total <= 4) return 0.5;
+  if (total === 5) return 0.4;
+  if (total === 6) return 0.3;
+  if (total === 7) return 0.2;
+  return 0.1;
+};
+
+const getLandStackStep = (total) => {
+  const revealRatio = getLandStackRevealRatio(total);
+  return {
+    mobile: Math.max(6, Math.round(64 * revealRatio)),
+    desktop: Math.max(8, Math.round(80 * revealRatio))
+  };
+};
+
+const DIFFICULTY_ART = {
+  easy: '/difficulty/deathfish.png',
+  medium: '/difficulty/redfish.png',
+  hard: '/difficulty/shark.png'
+};
+
 // --- PRELOADER COMPONENT ---
 const Preloader = ({ onComplete }) => {
   const [progress, setProgress] = useState(0);
@@ -207,6 +241,7 @@ const Preloader = ({ onComplete }) => {
   useEffect(() => {
     const urls = new Set();
     Object.values(CARDS).forEach(c => { urls.add(c.image); urls.add(c.fullImage); });
+    Object.values(DIFFICULTY_ART).forEach(url => urls.add(url));
     const urlArray = Array.from(urls);
     let loaded = 0;
     
@@ -224,13 +259,40 @@ const Preloader = ({ onComplete }) => {
   }, [onComplete]);
 
   return (
-    <div className="h-dvh bg-slate-950 flex flex-col items-center justify-center p-6 text-slate-200">
-      <Loader2 className="animate-spin text-blue-500 mb-6" size={48} />
-      <h2 className="text-2xl font-bold mb-2">Loading Assets</h2>
-      <div className="w-full max-w-xs bg-slate-800 h-2 rounded-full overflow-hidden">
-         <div className="bg-blue-500 h-full transition-all duration-300" style={{ width: `${progress}%` }} />
+    <div className="h-dvh bg-[#05101b] flex items-center justify-center overflow-hidden relative p-6">
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_22%_18%,rgba(34,211,238,0.14),transparent_24%),radial-gradient(circle_at_82%_24%,rgba(56,189,248,0.1),transparent_22%),radial-gradient(circle_at_50%_100%,rgba(103,232,249,0.08),transparent_30%),linear-gradient(180deg,#03101c_0%,#082035_52%,#04111b_100%)]" />
+      <div className="absolute inset-0 opacity-[0.05] mix-blend-screen" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.18) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.18) 1px, transparent 1px)', backgroundSize: '56px 56px' }} />
+      <div className="absolute left-[-3rem] top-10 w-44 h-44 rounded-full bg-cyan-300/16 blur-3xl" />
+      <div className="absolute right-[-2rem] bottom-10 w-48 h-48 rounded-full bg-sky-300/12 blur-3xl" />
+
+      <div className="relative z-10 w-full max-w-md">
+        <div className="relative mx-auto h-32 sm:h-36 w-full rounded-[999px] border border-cyan-100/10 bg-slate-950/60 backdrop-blur-2xl shadow-[0_24px_70px_rgba(2,6,23,0.65)] overflow-hidden">
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.06)_0%,rgba(255,255,255,0)_100%)]" />
+          <div
+            className="absolute inset-y-0 left-0 rounded-[999px] bg-gradient-to-r from-cyan-500/75 via-sky-400/55 to-cyan-200/10 transition-all duration-300"
+            style={{ width: `${Math.max(progress, 8)}%` }}
+          />
+          <div className="absolute inset-x-3 top-1/2 -translate-y-1/2 h-[1px] bg-cyan-100/15" />
+
+          <div className="absolute left-[12%] top-[28%] w-2.5 h-2.5 rounded-full border border-cyan-100/40 bg-cyan-200/10 bubble-rise-1" />
+          <div className="absolute left-[48%] top-[58%] w-1.5 h-1.5 rounded-full border border-cyan-100/35 bg-cyan-200/10 bubble-rise-2" />
+          <div className="absolute right-[16%] top-[36%] w-2 h-2 rounded-full border border-cyan-100/40 bg-cyan-200/10 bubble-rise-3" />
+
+          <div
+            className="absolute top-1/2 -translate-y-1/2 transition-all duration-300"
+            style={{ left: `calc(${Math.min(progress, 96)}% - 2.75rem)` }}
+          >
+            <div className="relative fish-bob">
+              <div className="w-16 h-10 rounded-[999px] bg-gradient-to-r from-orange-300 via-orange-400 to-orange-500 shadow-[0_0_24px_rgba(251,146,60,0.4)] border border-orange-100/30" />
+              <div className="absolute left-[-9px] top-1/2 -translate-y-1/2 w-0 h-0 border-y-[10px] border-y-transparent border-r-[14px] border-r-orange-300/90" />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-slate-950/85 border border-white/20" />
+              <div className="absolute right-[6px] top-[17px] w-1 h-1 rounded-full bg-white/90" />
+              <div className="absolute left-[18px] -top-2 w-4 h-4 rounded-t-[999px] rounded-b-sm bg-orange-400/90 rotate-[-18deg]" />
+              <div className="absolute left-[20px] -bottom-2 w-4 h-4 rounded-b-[999px] rounded-t-sm bg-orange-500/85 rotate-[14deg]" />
+            </div>
+          </div>
+        </div>
       </div>
-      <p className="mt-2 text-slate-500 text-sm">{progress}%</p>
     </div>
   );
 };
@@ -350,33 +412,64 @@ const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false
 };
 
 // --- STACKED LAND COMPONENT ---
-const StackedLandGroup = ({ lands, official, state, zone, onZoom, onClick }) => {
+const StackedLandGroup = ({ lands, official, state, zone, onZoom, onClick, activatablePlayer = null }) => {
   if (!lands || lands.length === 0) return null;
-  const baseLand = lands[0];
-  const displayLand = zone === 'board'
-    ? lands.find(land => isActivatable(land, state)) || lands.find(land => !land.tapped) || baseLand
-    : baseLand;
   const total = lands.length;
+  const { mobile, desktop } = getLandStackStep(total);
+  const orderedLands = [...lands].sort((a, b) => {
+    const aActivatable = zone === 'board' && activatablePlayer ? isActivatable(a, state, activatablePlayer) : false;
+    const bActivatable = zone === 'board' && activatablePlayer ? isActivatable(b, state, activatablePlayer) : false;
+    if (aActivatable !== bActivatable) return aActivatable ? 1 : -1;
+    if (a.tapped !== b.tapped) return a.tapped ? -1 : 1;
+    return 0;
+  });
+  const activatableLand = zone === 'board' && activatablePlayer
+    ? orderedLands.find(land => isActivatable(land, state, activatablePlayer))
+    : null;
+  const isGroupActivatable = Boolean(activatableLand);
   const tapped = lands.filter(l => l.tapped).length;
 
   return (
-    <div className="relative">
-       {total > 1 && <div className="absolute inset-0 bg-slate-800 rounded-md shadow -translate-y-1 translate-x-1 z-0" />}
-       {total > 2 && <div className="absolute inset-0 bg-slate-700 rounded-md shadow -translate-y-2 translate-x-2 z-0" />}
-       <div className="relative z-10">
-          <Card 
-             card={{...displayLand, tapped: tapped > 0 && tapped === total}} 
-             zone={zone} official={official} 
-             onZoom={onZoom}
-             onClick={onClick}
-             targetable={isValidTarget(displayLand, zone, state)}
-             activatable={isActivatable(displayLand, state)}
-           />
-          <div className="absolute -top-2 -right-2 bg-slate-900 text-blue-300 border border-blue-500 font-bold px-1.5 py-0.5 rounded shadow-lg text-[10px] z-20 flex flex-col items-center">
-             <span>x{total}</span>
-             {tapped > 0 && <span className="text-[8px] text-slate-400 leading-none">{tapped} tap</span>}
-          </div>
-       </div>
+    <div
+      className={`land-stack-group ${isGroupActivatable ? 'drop-shadow-[0_0_20px_rgba(34,211,238,0.35)]' : ''}`}
+      style={{
+        '--land-count': `${total}`,
+        '--land-step-mobile': `${mobile}px`,
+        '--land-step-desktop': `${desktop}px`
+      }}
+    >
+      {orderedLands.map((land, index) => (
+        <div
+          key={land.id}
+          className="land-stack-card transition-all duration-200"
+          style={{ '--land-index': `${index}`, zIndex: index + 1 }}
+        >
+          <Card
+            card={land}
+            zone={zone}
+            official={official}
+            onZoom={onZoom}
+            onClick={onClick}
+            targetable={isValidTarget(land, zone, state)}
+            activatable={Boolean(activatablePlayer) && isActivatable(land, state, activatablePlayer)}
+          />
+        </div>
+      ))}
+      {isGroupActivatable && zone === 'board' && (
+        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-cyan-400 text-slate-950 border border-cyan-200 font-black px-2 py-0.5 rounded-full shadow-[0_0_15px_rgba(34,211,238,0.6)] text-[9px] tracking-widest z-20">
+          ACTIVATE
+        </div>
+      )}
+      {total >= 5 && (
+        <div className="absolute -top-2 -right-2 bg-slate-900/95 text-blue-300 border border-blue-500 font-bold px-1.5 py-0.5 rounded shadow-lg text-[10px] z-20">
+          x{total}
+        </div>
+      )}
+      {tapped > 0 && total >= 5 && (
+        <div className="absolute -bottom-1 right-0 bg-slate-950/95 text-slate-300 border border-slate-700 font-bold px-1.5 py-0.5 rounded shadow text-[9px] z-20">
+          {tapped} tap
+        </div>
+      )}
     </div>
   );
 };
@@ -387,6 +480,7 @@ export default function App() {
   const [state, dispatch] = useReducer(gameReducer, initialState);
   const [selectedDifficulty, setSelectedDifficulty] = useState('medium');
   const [useOfficialCards, setUseOfficialCards] = useState(true);
+  const [showMenuSettings, setShowMenuSettings] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [muted, setMuted] = useState(false);
   const [draggedIdx, setDraggedIdx] = useState(null);
@@ -434,13 +528,11 @@ export default function App() {
 
   const resolveAiPendingAction = () => {
     if (!state.pendingAction) return;
+    const policy = getLivePolicyWeights(state.difficulty || 'medium');
 
     if (state.pendingAction.type === 'BRAINSTORM' || state.pendingAction.type === 'DISCARD' || state.pendingAction.type === 'DISCARD_CLEANUP' || state.pendingAction.type === 'MULLIGAN_BOTTOM') {
       const count = state.pendingAction.count || 0;
-      const selected = [...state.player.hand]
-        .sort((a, b) => Number(a.isLand) - Number(b.isLand) || b.cost - a.cost)
-        .slice(0, count)
-        .map(card => card.id);
+      const selected = pickAiPendingCards(state.player.hand, count, policy);
       selected.forEach(cardId => dispatch({ type: 'TOGGLE_PENDING_SELECT', cardId }));
       setTimeout(() => dispatch({ type: 'SUBMIT_PENDING_ACTION' }), 0);
       return;
@@ -452,7 +544,8 @@ export default function App() {
     }
 
     if (state.pendingAction.type === 'TELLING_TIME') {
-      const [handCard, topCard] = state.pendingAction.cards;
+      const ordered = [...state.pendingAction.cards].sort((a, b) => Number(b.isLand) - Number(a.isLand) || a.cost - b.cost);
+      const [handCard, topCard] = ordered;
       if (handCard) dispatch({ type: 'UPDATE_TELLING_TIME', cardId: handCard.id, dest: 'hand' });
       if (topCard) dispatch({ type: 'UPDATE_TELLING_TIME', cardId: topCard.id, dest: 'top' });
       setTimeout(() => dispatch({ type: 'SUBMIT_PENDING_ACTION' }), 0);
@@ -479,7 +572,7 @@ export default function App() {
       if (topSpell.controller === opponent) {
         const lapse = state[actor].hand.find(c => c.name === 'Memory Lapse');
         if (canCast(lapse) && topSpell.card.name === DANDAN_NAME) {
-          if (policy.counterBias < 0.65 || shouldMakeMistake(difficulty, 0.08, policy)) {
+          if (policy.counterBias < 0.62 || shouldMakeMistake(difficulty, 0.05, policy)) {
             dispatch({ type: 'PASS_PRIORITY', player: actor });
             return;
           }
@@ -488,7 +581,7 @@ export default function App() {
         }
         const unsub = state[actor].hand.find(c => c.name === 'Unsubstantiate');
         if (canCast(unsub) && topSpell.card.name === DANDAN_NAME) {
-          if (policy.counterBias < 0.5 || shouldMakeMistake(difficulty, 0.12, policy)) {
+          if (policy.counterBias < 0.5 || shouldMakeMistake(difficulty, 0.08, policy)) {
             dispatch({ type: 'PASS_PRIORITY', player: actor });
             return;
           }
@@ -513,7 +606,7 @@ export default function App() {
       const opponentAttacking = state[opponent].board.some(c => c.attacking);
       if (opponentAttacking) {
           const hack = state[actor].hand.find(c => ['Magical Hack', 'Crystal Spray', 'Metamorphose'].includes(c.name));
-          if (!state[actor].board.some(c => c.name === DANDAN_NAME && !c.tapped) && canCast(hack) && policy.control >= 0.4) {
+          if (!state[actor].board.some(c => c.name === DANDAN_NAME && !c.tapped) && canCast(hack) && policy.control >= 0.5) {
              const target = state[opponent].board.find(c => c.attacking);
              if (target) { dispatch({ type: 'CAST_SPELL', player: actor, cardId: hack.id, target }); return; }
           }
@@ -525,22 +618,23 @@ export default function App() {
     }
 
     if (state.turn === actor && (state.phase === 'main1' || state.phase === 'main2' || state.phase === 'upkeep')) {
+      const landsInPlay = state[actor].board.filter(c => c.isLand).length;
       const land = state[actor].hand.find(c => c.isLand);
-      if (state.phase !== 'upkeep' && land && state[actor].landsPlayed === 0 && state[actor].board.filter(c => c.isLand).length < policy.landLimit) { dispatch({ type: 'PLAY_LAND', player: actor, cardId: land.id }); return; }
+      if (state.phase !== 'upkeep' && land && state[actor].landsPlayed === 0 && landsInPlay < policy.landLimit) { dispatch({ type: 'PLAY_LAND', player: actor, cardId: land.id }); return; }
       
       const dandan = state[actor].hand.find(c => c.name === DANDAN_NAME);
       const opponentHasIsland = controlsIsland(state[opponent].board);
-       if (state.phase !== 'upkeep' && canCast(dandan) && opponentHasIsland && !shouldMakeMistake(difficulty, 0.08, policy)) { dispatch({ type: 'CAST_SPELL', player: actor, cardId: dandan.id }); return; }
+       if (state.phase !== 'upkeep' && canCast(dandan) && opponentHasIsland && !shouldMakeMistake(difficulty, 0.06, policy)) { dispatch({ type: 'CAST_SPELL', player: actor, cardId: dandan.id }); return; }
       
       const hack = state[actor].hand.find(c => ['Magical Hack', 'Crystal Spray', 'Metamorphose'].includes(c.name));
-      if (state.phase !== 'upkeep' && canCast(hack) && state[opponent].board.some(c => c.name === DANDAN_NAME) && policy.control >= 0.4) {
+      if (state.phase !== 'upkeep' && canCast(hack) && state[opponent].board.some(c => c.name === DANDAN_NAME) && policy.control >= 0.42) {
          const target = state[opponent].board.find(c => c.name === DANDAN_NAME);
          dispatch({ type: 'CAST_SPELL', player: actor, cardId: hack.id, target }); 
          return;
       }
       
       const controlMagic = state[actor].hand.find(c => c.name === 'Control Magic');
-      if (state.phase !== 'upkeep' && canCast(controlMagic) && state[opponent].board.some(c => c.name === DANDAN_NAME) && policy.stealBias >= 0.8) {
+      if (state.phase !== 'upkeep' && canCast(controlMagic) && state[opponent].board.some(c => c.name === DANDAN_NAME) && policy.stealBias >= 0.72) {
         const target = state[opponent].board.find(c => c.name === DANDAN_NAME);
         dispatch({ type: 'CAST_SPELL', player: actor, cardId: controlMagic.id, target });
         return;
@@ -558,6 +652,13 @@ export default function App() {
           return;
         }
       }
+
+      const cycler = state[actor].hand.find(c => isCyclable(c, state, actor));
+      const spareLandsInHand = state[actor].hand.filter(c => c.isLand).length;
+      if (cycler && (landsInPlay >= policy.landLimit || spareLandsInHand > 2)) {
+        dispatch({ type: 'CYCLE_CARD', player: actor, cardId: cycler.id });
+        return;
+      }
     }
     
     dispatch({ type: 'PASS_PRIORITY', player: actor });
@@ -571,8 +672,20 @@ export default function App() {
        dispatch({ type: 'CAST_WITH_TARGET', targetId: card.id, targetZone: zone }); return;
     }
     
-    if (zone === 'hand' && isCastable(card, state)) {
-      card.isLand ? dispatch({ type: 'PLAY_LAND', player: 'player', cardId: card.id }) : dispatch({ type: 'CAST_SPELL', player: 'player', cardId: card.id });
+    if (zone === 'hand') {
+      const canPlay = isCastable(card, state);
+      const canCycle = isCyclable(card, state);
+      if (card.isLand && canPlay && canCycle) {
+        dispatch({ type: 'PROMPT_HAND_LAND_ACTION', cardId: card.id });
+        return;
+      }
+      if (card.isLand && canCycle) {
+        dispatch({ type: 'CYCLE_CARD', player: 'player', cardId: card.id });
+        return;
+      }
+      if (canPlay) {
+        card.isLand ? dispatch({ type: 'PLAY_LAND', player: 'player', cardId: card.id }) : dispatch({ type: 'CAST_SPELL', player: 'player', cardId: card.id });
+      }
     } else if (zone === 'board') {
       if (card.name === 'DandÃ¢n') {
          if (state.phase === 'declare_attackers' && state.turn === 'player' && !card.summoningSickness && !card.tapped) {
@@ -597,38 +710,119 @@ export default function App() {
 
   if (!state.started) {
     return (
-      <div className="h-dvh bg-slate-900 text-slate-100 flex flex-col items-center justify-center p-6 font-sans bg-[url('https://cards.scryfall.io/art_crop/front/a/c/ac2e32d0-f172-4934-9d73-1bc2ab86586e.jpg')] bg-cover bg-center">
-        <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md" />
-        <div className="relative max-w-md w-full text-center space-y-8 z-10">
-          <div className="p-6 bg-slate-900/60 rounded-2xl border border-slate-700 shadow-2xl backdrop-blur-xl">
-             <h1 className="text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 tracking-tight leading-tight mb-2">
-               Forgetful Fish
-             </h1>
-             <p className="text-sm md:text-base text-slate-300 mb-6 font-medium">Shared-deck Dandan arena with player and spectate modes.</p>
-             <div className="mb-5">
-               <p className="text-[11px] uppercase tracking-[0.25em] text-slate-400 mb-3">AI Difficulty</p>
-               <div className="grid grid-cols-3 gap-2">
-                 {AI_DIFFICULTIES.map((difficulty) => (
-                   <button
-                     key={difficulty}
-                     onClick={() => setSelectedDifficulty(difficulty)}
-                     className={`py-2 rounded-lg border text-sm font-bold transition-colors ${selectedDifficulty === difficulty ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200' : 'bg-slate-950/60 border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500'}`}
-                   >
-                     {AI_DIFFICULTY_LABELS[difficulty]}
-                   </button>
-                 ))}
-               </div>
-             </div>
-             <div className="space-y-3">
-               <button onClick={() => dispatch({ type: 'START_GAME', mode: 'player', difficulty: selectedDifficulty })} className="w-full py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-lg shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all flex items-center justify-center gap-2">
-                 <Play fill="currentColor" size={20} /> START NEW GAME
-               </button>
-               <button onClick={() => dispatch({ type: 'START_GAME', mode: 'ai_vs_ai', difficulty: selectedDifficulty })} className="w-full py-4 bg-red-700 hover:bg-red-600 text-white font-bold rounded-xl text-lg shadow-[0_0_20px_rgba(239,68,68,0.3)] transition-all flex items-center justify-center gap-2">
-                 <Activity size={20} /> AI MODE
-               </button>
-             </div>
+      <div
+        className="h-dvh bg-[#05101b] text-slate-100 flex items-center justify-center px-4 sm:px-6 overflow-hidden relative"
+        style={{
+          paddingTop: 'max(1rem, env(safe-area-inset-top))',
+          paddingBottom: 'max(1rem, env(safe-area-inset-bottom))',
+          WebkitTapHighlightColor: 'transparent'
+        }}
+      >
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_18%_18%,rgba(34,211,238,0.18),transparent_30%),radial-gradient(circle_at_82%_22%,rgba(125,211,252,0.12),transparent_24%),radial-gradient(circle_at_50%_100%,rgba(167,139,250,0.12),transparent_32%),linear-gradient(180deg,#03101c_0%,#072035_52%,#04111b_100%)]" />
+        <div className="absolute inset-0 opacity-[0.05] mix-blend-screen" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.2) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.2) 1px, transparent 1px)', backgroundSize: '58px 58px' }} />
+        <div className="absolute -left-10 top-8 w-40 h-40 rounded-full bg-cyan-300/18 blur-3xl animate-pulse" />
+        <div className="absolute right-[-2rem] top-1/2 -translate-y-1/2 w-44 h-44 rounded-full bg-sky-300/12 blur-3xl animate-pulse" />
+        <div className="absolute left-1/2 bottom-[-4rem] -translate-x-1/2 w-72 h-32 rounded-[999px] bg-cyan-300/10 blur-3xl" />
+
+        <div className="relative z-10 w-full max-w-md mx-auto h-full flex items-center justify-center">
+          <div className="relative w-full max-h-full overflow-hidden rounded-[2.1rem] bg-slate-950/66 backdrop-blur-3xl shadow-[0_28px_80px_rgba(2,6,23,0.68)]">
+            <div className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-cyan-100/70 to-transparent" />
+            <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.06)_0%,rgba(255,255,255,0.02)_40%,rgba(255,255,255,0)_100%)] pointer-events-none" />
+            <div className="absolute -top-20 right-[-1.5rem] w-40 h-40 rounded-full bg-cyan-300/12 blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-20 left-[-1.5rem] w-44 h-44 rounded-full bg-fuchsia-300/10 blur-3xl pointer-events-none" />
+
+            <div className="relative p-5 sm:p-6">
+              <div className="flex items-start justify-between gap-4 mb-6">
+                <h1 className="font-arena-display text-[2.65rem] sm:text-5xl leading-[0.94] font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-cyan-100 to-sky-300">
+                  Forgetful
+                  <br />
+                  Fish
+                </h1>
+                <button
+                  onClick={() => setShowMenuSettings(true)}
+                  aria-label="Open settings"
+                  className="font-arena-display shrink-0 w-12 h-12 rounded-2xl bg-slate-900/90 border border-slate-700 text-slate-100 hover:bg-slate-800 active:scale-[0.97] transition-all flex items-center justify-center shadow-[0_12px_28px_rgba(2,6,23,0.35)]"
+                >
+                  <Settings size={17} />
+                </button>
+              </div>
+
+              <div className="relative mb-6 rounded-[1.7rem] border border-white/10 bg-white/[0.04] px-3 py-4 sm:px-4 sm:py-5">
+                <div className="absolute inset-x-4 top-3 h-10 rounded-full bg-cyan-200/6 blur-2xl pointer-events-none" />
+                <div className="grid grid-cols-3 gap-2.5 sm:gap-3">
+                  {AI_DIFFICULTIES.map((difficulty) => (
+                    <button
+                      key={difficulty}
+                      onClick={() => setSelectedDifficulty(difficulty)}
+                      className={`font-arena-display group rounded-[1.35rem] px-2 py-2.5 sm:px-3 sm:py-3 transition-all duration-200 active:scale-[0.98] ${
+                        selectedDifficulty === difficulty
+                          ? 'bg-white/10 shadow-[0_14px_32px_rgba(34,211,238,0.12)]'
+                          : 'bg-transparent hover:bg-white/6'
+                      }`}
+                    >
+                      <div className={`mx-auto w-[84px] h-[84px] sm:w-24 sm:h-24 rounded-full p-[3px] transition-all duration-200 ${
+                        selectedDifficulty === difficulty
+                          ? 'bg-gradient-to-br from-cyan-200 via-sky-300 to-blue-400 shadow-[0_0_28px_rgba(56,189,248,0.38)]'
+                          : 'bg-white/12 group-hover:bg-white/18'
+                      }`}>
+                        <img
+                          src={DIFFICULTY_ART[difficulty]}
+                          alt={AI_DIFFICULTY_LABELS[difficulty]}
+                          className="w-full h-full object-cover rounded-full border-2 border-slate-950/80"
+                        />
+                      </div>
+                      <div className={`mt-2 text-[11px] sm:text-xs font-extrabold tracking-[0.2em] uppercase ${
+                        selectedDifficulty === difficulty ? 'text-cyan-100' : 'text-slate-300'
+                      }`}>
+                        {AI_DIFFICULTY_LABELS[difficulty]}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid gap-3">
+                <button
+                  onClick={() => dispatch({ type: 'START_GAME', mode: 'player', difficulty: selectedDifficulty })}
+                  className="font-arena-display w-full min-h-[60px] py-4 px-4 bg-[#38bdf8] hover:bg-[#22c7ff] active:scale-[0.99] text-slate-950 font-bold tracking-[0.12em] uppercase rounded-[1.55rem] text-base border border-sky-200/70 shadow-[0_16px_28px_rgba(56,189,248,0.28)] transition-all flex items-center justify-center gap-2"
+                >
+                  <Play fill="currentColor" size={18} /> Start New Game
+                </button>
+                <button
+                  onClick={() => dispatch({ type: 'START_GAME', mode: 'ai_vs_ai', difficulty: selectedDifficulty })}
+                  className="font-arena-display w-full min-h-[60px] py-4 px-4 bg-slate-900/92 hover:bg-slate-800 active:scale-[0.99] text-slate-100 font-bold tracking-[0.12em] uppercase rounded-[1.55rem] text-base border border-slate-600 shadow-[0_16px_28px_rgba(15,23,42,0.4)] transition-all flex items-center justify-center gap-2"
+                >
+                  <Activity size={18} /> AI Mode
+                </button>
+              </div>
+            </div>
           </div>
         </div>
+        {showMenuSettings && (
+          <div className="absolute inset-0 z-20 bg-black/72 backdrop-blur-md flex items-center justify-center p-4 sm:p-6">
+            <div className="w-full max-w-sm bg-slate-900/96 border border-white/12 rounded-[1.9rem] shadow-[0_26px_80px_rgba(2,6,23,0.72)] p-5 sm:p-6 text-left">
+              <div className="flex items-center justify-between mb-5">
+                <h2 className="text-lg font-black text-cyan-100 tracking-[0.22em] uppercase">Settings</h2>
+                <button onClick={() => setShowMenuSettings(false)} className="font-arena-display w-10 h-10 rounded-2xl bg-slate-950 border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all flex items-center justify-center">
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="space-y-3">
+                <button onClick={() => setMuted(!muted)} className={`font-arena-display w-full flex items-center justify-between px-4 py-3.5 rounded-2xl border transition-all ${muted ? 'bg-slate-950 border-slate-700 text-slate-300' : 'bg-sky-400 border-sky-200 text-slate-950 shadow-[0_0_18px_rgba(56,189,248,0.2)]'}`}>
+                  <span className="font-bold uppercase tracking-wider text-sm">Sound</span>
+                  <span className="flex items-center gap-2 text-sm">{muted ? <VolumeX size={16}/> : <Volume2 size={16}/>} {muted ? 'Muted' : 'On'}</span>
+                </button>
+                <button onClick={() => setUseOfficialCards(!useOfficialCards)} className={`font-arena-display w-full flex items-center justify-between px-4 py-3.5 rounded-2xl border transition-all ${useOfficialCards ? 'bg-sky-400 border-sky-200 text-slate-950 shadow-[0_0_18px_rgba(56,189,248,0.2)]' : 'bg-slate-950 border-slate-700 text-slate-300'}`}>
+                  <span className="font-bold uppercase tracking-wider text-sm">Card Art</span>
+                  <span className="flex items-center gap-2 text-sm"><ImageIcon size={16}/> {useOfficialCards ? 'SLD Art' : 'Proxy'}</span>
+                </button>
+              </div>
+              <button onClick={() => setShowMenuSettings(false)} className="font-arena-display w-full mt-5 py-3.5 bg-[#38bdf8] hover:bg-[#22c7ff] text-slate-950 font-bold tracking-[0.12em] uppercase rounded-2xl border border-sky-200/70 transition-colors shadow-[0_14px_28px_rgba(56,189,248,0.22)]">
+                Close
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -637,10 +831,11 @@ export default function App() {
     return (
       <div className="h-dvh bg-slate-950 text-slate-100 flex items-center justify-center p-6">
         <div className="text-center space-y-6 max-w-sm w-full bg-slate-900/80 p-8 rounded-2xl border border-slate-700 shadow-2xl">
-          <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-b from-slate-100 to-slate-400">
+          <h1 className="font-arena-display text-4xl font-black tracking-[0.12em] uppercase text-transparent bg-clip-text bg-gradient-to-b from-slate-100 to-slate-400">
              {state.winner === 'player' ? 'VICTORY' : 'DEFEAT'}
           </h1>
-          <button onClick={() => dispatch({ type: 'START_GAME', mode: state.gameMode, difficulty: state.difficulty })} className="w-full py-3 bg-blue-600 rounded-xl font-bold tracking-widest uppercase">Play Again</button>
+          <button onClick={() => dispatch({ type: 'START_GAME', mode: state.gameMode, difficulty: state.difficulty })} className="w-full py-3 bg-[#38bdf8] hover:bg-[#22c7ff] text-slate-950 rounded-xl font-bold tracking-widest uppercase border border-sky-200/70 shadow-[0_0_24px_rgba(56,189,248,0.28)] transition-colors">Play Again</button>
+          <button onClick={() => dispatch({ type: 'RETURN_TO_MENU' })} className="w-full py-3 bg-slate-900/92 hover:bg-slate-800 text-slate-100 rounded-xl font-bold tracking-widest uppercase border border-slate-600 transition-colors">Back To Menu</button>
         </div>
       </div>
     );
@@ -725,7 +920,7 @@ export default function App() {
         
         <div className="flex gap-2">
            <button onClick={() => setViewingZone('deck')} className="px-3 py-1.5 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-blue-300 rounded flex items-center gap-1.5 text-[10px] font-mono font-bold transition-colors shadow-inner">
-             <Layers size={14} className="text-slate-400"/> {state.deck.length}
+             <Layers size={14} className="text-slate-400"/> {state.deck.length}/{SHARED_DECK_SIZE}
            </button>
            <button onClick={() => setViewingZone('graveyard')} className="px-3 py-1.5 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-300 rounded flex items-center gap-1.5 text-[10px] font-mono font-bold transition-colors shadow-inner">
              <Skull size={14} className="text-slate-400"/> {state.graveyard.length}
@@ -736,25 +931,25 @@ export default function App() {
       {/* STARTING MULLIGAN MODAL */}
       {state.phase === 'mulligan' && !state.pendingAction && (
          <div className="absolute inset-0 bg-black/90 z-[110] flex flex-col items-center justify-center p-4 backdrop-blur-md animate-in fade-in duration-300">
-             <h2 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 mb-2">Starting Hand</h2>
+             <h2 className="font-arena-display text-4xl font-black tracking-[0.12em] uppercase text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 mb-2">Starting Hand</h2>
              <p className="text-slate-400 mb-8 font-mono">Mulligans taken: {state.mulliganCount || 0}</p>
              
              <div className="flex gap-2 sm:gap-4 justify-center mb-12 flex-wrap max-w-4xl">
                 {state.player.hand.map(c => <div key={c.id} className="animate-in slide-in-from-bottom-8"><Card card={c} official={useOfficialCards} onZoom={setZoomedCard} /></div>)}
              </div>
   
-             <div className="flex gap-6">
-                <button onClick={() => dispatch({ type: 'KEEP_HAND' })} className="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-black tracking-widest uppercase rounded-xl shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all hover:scale-105">Keep Hand</button>
-                <button onClick={() => dispatch({ type: 'MULLIGAN' })} className="px-8 py-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-black tracking-widest uppercase rounded-xl shadow-lg border border-slate-700 transition-all hover:scale-105">Mulligan</button>
-             </div>
-         </div>
+              <div className="flex gap-6">
+                 <button onClick={() => dispatch({ type: 'KEEP_HAND' })} className="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-black tracking-widest uppercase rounded-xl shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all hover:scale-105">Keep Hand</button>
+                <button disabled={(state.mulliganCount || 0) >= 7} onClick={() => dispatch({ type: 'MULLIGAN' })} className="px-8 py-4 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-200 font-black tracking-widest uppercase rounded-xl shadow-lg border border-slate-700 transition-all hover:scale-105 disabled:hover:scale-100">Mulligan</button>
+              </div>
+          </div>
       )}
 
       {/* MULTI-CARD SELECT PENDING MODAL */}
       {state.pendingAction && ['MULLIGAN_BOTTOM', 'DISCARD_CLEANUP'].includes(state.pendingAction.type) && (
          <div className="absolute inset-0 bg-black/90 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-slate-900 p-8 rounded-2xl border border-slate-700 shadow-2xl w-full max-w-2xl flex flex-col items-center text-center">
-               <h3 className="text-2xl font-black text-blue-400 mb-2 tracking-widest uppercase">{state.pendingAction.type === 'MULLIGAN_BOTTOM' ? 'Mulligan' : 'Cleanup Step'}</h3>
+               <h3 className="font-arena-display text-2xl font-black text-blue-400 mb-2 tracking-[0.16em] uppercase">{state.pendingAction.type === 'MULLIGAN_BOTTOM' ? 'Mulligan' : 'Cleanup Step'}</h3>
                <p className="text-slate-300 text-sm mb-8">Select <span className="text-white font-bold text-lg">{state.pendingAction.count}</span> card(s) to discard or put on bottom.</p>
                <div className="flex flex-wrap gap-3 justify-center mb-8">
                   {state.player.hand.map(c => (
@@ -772,11 +967,33 @@ export default function App() {
       {state.pendingAction && state.pendingAction.type === 'ACTIVATE_LAND' && (
          <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-sm flex flex-col items-center text-center">
-               <h3 className="text-xl font-bold text-blue-400 mb-2">Activate Ability</h3>
-               <p className="text-slate-300 text-sm mb-6">Do you want to sacrifice <strong>{state.pendingAction.cardName}</strong> and pay {state.pendingAction.cost} mana to activate its ability?</p>
+               <h3 className="font-arena-display text-xl font-bold text-blue-400 mb-2 tracking-[0.12em] uppercase">Activate Ability</h3>
+               <p className="text-slate-300 text-sm mb-6">
+                 {state.pendingAction.cardName === 'Svyelunite Temple'
+                   ? <>Are you sure you want to sacrifice <strong>{state.pendingAction.cardName}</strong> to add <strong>2 blue mana</strong>?</>
+                   : <>Do you want to sacrifice <strong>{state.pendingAction.cardName}</strong> and pay {state.pendingAction.activation?.total ?? 0} mana to activate its ability?</>}
+               </p>
                <div className="flex gap-4 w-full">
                   <button onClick={() => dispatch({ type: 'CANCEL_PENDING_ACTION' })} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-colors">Cancel</button>
                   <button onClick={() => dispatch({ type: 'SUBMIT_PENDING_ACTION' })} className="flex-1 py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl transition-colors">Activate</button>
+               </div>
+            </div>
+         </div>
+      )}
+
+      {state.pendingAction && state.pendingAction.type === 'HAND_LAND_ACTION' && (
+         <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
+            <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-sm flex flex-col items-center text-center">
+               <h3 className="font-arena-display text-xl font-bold text-blue-400 mb-2 tracking-[0.12em] uppercase">{state.pendingAction.cardName}</h3>
+               <p className="text-slate-300 text-sm mb-6">Choose whether to play this land or cycle it.</p>
+               <div className="grid grid-cols-1 gap-3 w-full">
+                  {state.pendingAction.canPlay && (
+                    <button onClick={() => dispatch({ type: 'PLAY_LAND', player: 'player', cardId: state.pendingAction.cardId })} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-colors">Play Land</button>
+                  )}
+                  {state.pendingAction.canCycle && (
+                    <button onClick={() => dispatch({ type: 'CYCLE_CARD', player: 'player', cardId: state.pendingAction.cardId })} className="w-full py-3 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-xl transition-colors">Cycle {state.pendingAction.cyclingCost}</button>
+                  )}
+                  <button onClick={() => dispatch({ type: 'CANCEL_PENDING_ACTION' })} className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-colors">Cancel</button>
                </div>
             </div>
          </div>
@@ -786,7 +1003,7 @@ export default function App() {
       {state.pendingAction && state.pendingAction.type === 'MYSTIC_SANCTUARY' && (
          <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-4xl flex flex-col items-center text-center max-h-[90vh]">
-               <h3 className="text-xl font-bold text-blue-400 mb-2">Mystic Sanctuary</h3>
+               <h3 className="font-arena-display text-xl font-bold text-blue-400 mb-2 tracking-[0.12em] uppercase">Mystic Sanctuary</h3>
                <p className="text-slate-300 text-sm mb-6">Select an Instant or Sorcery from your graveyard to put on top of your library. Or skip.</p>
                <div className="flex flex-wrap gap-2 justify-center mb-6 overflow-y-auto custom-scrollbar p-2 w-full">
                   {state.graveyard.filter(c => state.pendingAction.validTargets.includes(c.id)).map(c => (
@@ -804,9 +1021,9 @@ export default function App() {
       {viewingZone && (
          <div className="absolute inset-0 bg-black/95 z-[160] flex flex-col p-4 sm:p-8 backdrop-blur-lg animate-in fade-in duration-200">
              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                <h2 className="font-arena-display text-2xl font-bold tracking-[0.12em] uppercase text-white flex items-center gap-3">
                    {viewingZone === 'deck' ? <Layers size={28} className="text-blue-400"/> : <Skull size={28} className="text-slate-400"/>} 
-                   {viewingZone === 'deck' ? 'Library Content' : 'Graveyard'}
+                   {viewingZone === 'deck' ? `Library ${state.deck.length}/${SHARED_DECK_SIZE}` : 'Graveyard'}
                 </h2>
                 <button onClick={() => setViewingZone(null)} className="text-slate-400 hover:text-white p-2 bg-slate-800 rounded-full transition-colors"><X size={24}/></button>
              </div>
@@ -843,7 +1060,7 @@ export default function App() {
       {state.pendingAction && state.pendingAction.type === 'BRAINSTORM' && (
          <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg flex flex-col items-center text-center">
-               <h3 className="text-xl font-bold text-blue-400 mb-2">Brainstorm</h3>
+               <h3 className="font-arena-display text-xl font-bold text-blue-400 mb-2 tracking-[0.12em] uppercase">Brainstorm</h3>
                <p className="text-slate-300 text-sm mb-6">Select 2 cards to put back on top of your library.</p>
                <div className="flex flex-wrap gap-2 justify-center mb-6">
                   {state.player.hand.map(c => (
@@ -860,7 +1077,7 @@ export default function App() {
       {state.pendingAction && state.pendingAction.type === 'DISCARD' && (
          <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg flex flex-col items-center text-center">
-               <h3 className="text-xl font-bold text-blue-400 mb-2">Chart a Course</h3>
+               <h3 className="font-arena-display text-xl font-bold text-blue-400 mb-2 tracking-[0.12em] uppercase">Chart a Course</h3>
                <p className="text-slate-300 text-sm mb-6">You haven't attacked. Select 1 card to discard.</p>
                <div className="flex flex-wrap gap-2 justify-center mb-6">
                   {state.player.hand.map(c => (
@@ -877,7 +1094,7 @@ export default function App() {
       {state.pendingAction && state.pendingAction.type === 'PREDICT' && (
          <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-sm flex flex-col items-center text-center h-[80vh]">
-               <h3 className="text-xl font-bold text-blue-400 mb-2">Predict</h3>
+               <h3 className="font-arena-display text-xl font-bold text-blue-400 mb-2 tracking-[0.12em] uppercase">Predict</h3>
                <p className="text-slate-300 text-sm mb-4">Name a card to predict the top of the deck.</p>
                <div className="flex flex-col gap-2 w-full overflow-y-auto custom-scrollbar pr-2 flex-1 border-t border-slate-800 pt-4">
                   {PREDICT_OPTIONS.map(name => (
@@ -893,7 +1110,7 @@ export default function App() {
       {state.pendingAction && state.pendingAction.type === 'TELLING_TIME' && (
          <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg flex flex-col items-center text-center">
-               <h3 className="text-xl font-bold text-blue-400 mb-2">Telling Time</h3>
+               <h3 className="font-arena-display text-xl font-bold text-blue-400 mb-2 tracking-[0.12em] uppercase">Telling Time</h3>
                <p className="text-slate-300 text-sm mb-6">Assign 1 to Hand and 1 to Top. The remainder goes to the Bottom.</p>
                <div className="flex gap-4 justify-center mb-6">
                   {state.pendingAction.cards.map(c => (
@@ -912,14 +1129,14 @@ export default function App() {
       {state.pendingAction && state.pendingAction.type === 'HALIMAR_DEPTHS' && (
          <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col items-center justify-center p-4 backdrop-blur-md">
             <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-lg flex flex-col items-center text-center">
-               <h3 className="text-xl font-bold text-blue-400 mb-2">Halimar Depths</h3>
+               <h3 className="font-arena-display text-xl font-bold text-blue-400 mb-2 tracking-[0.12em] uppercase">Halimar Depths</h3>
                <p className="text-slate-300 text-sm mb-2">Reorder the top 3 cards of your library.</p>
-               <p className="text-slate-500 text-[10px] mb-6 uppercase tracking-widest">(Drag and Drop to Reorder - Left is Top)</p>
+               <p className="text-slate-500 text-[10px] mb-6 uppercase tracking-widest">(Use arrows or drag. Left is top.)</p>
                <div className="flex gap-4 justify-center mb-8 h-[130px]">
                   {state.pendingAction.cards.map((c, i) => (
                      <div 
                         key={c.id} 
-                        className="relative"
+                        className="relative flex flex-col items-center gap-2"
                         draggable={true} 
                         onDragStart={() => setDraggedIdx(i)} 
                         onDragOver={(e) => { e.preventDefault(); }}
@@ -928,7 +1145,11 @@ export default function App() {
                            setDraggedIdx(null);
                         }}
                      >
-                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} />
+                        <div className="flex gap-2">
+                           <button disabled={i === 0} onClick={() => dispatch({ type: 'REORDER_HALIMAR', from: i, to: i - 1 })} className="px-2 py-1 rounded bg-slate-800 text-slate-300 disabled:opacity-30">←</button>
+                           <button disabled={i === state.pendingAction.cards.length - 1} onClick={() => dispatch({ type: 'REORDER_HALIMAR', from: i, to: i + 1 })} className="px-2 py-1 rounded bg-slate-800 text-slate-300 disabled:opacity-30">→</button>
+                        </div>
+                        <Card card={c} official={useOfficialCards} onZoom={null} />
                         <div className="absolute -bottom-6 w-full text-center text-[10px] font-bold text-slate-400">
                            {i === 0 ? 'TOP' : i === state.pendingAction.cards.length - 1 ? 'BOTTOM' : ''}
                         </div>
@@ -944,7 +1165,7 @@ export default function App() {
       {showLog && (
         <div className="absolute inset-0 bg-black/80 z-[100] flex flex-col p-4 backdrop-blur-md">
            <div className="flex justify-between items-center mb-4 bg-slate-900 p-3 rounded-xl border border-slate-700 shadow-lg">
-              <h2 className="font-bold text-blue-400 flex items-center gap-2"><Activity size={18}/> Battle Log</h2>
+              <h2 className="font-arena-display font-bold tracking-[0.12em] uppercase text-blue-400 flex items-center gap-2"><Activity size={18}/> Battle Log</h2>
               <button onClick={() => setShowLog(false)} className="text-slate-400 hover:text-white p-1"><X size={20}/></button>
            </div>
            <div className="space-y-2 flex-1 overflow-y-auto bg-slate-900/60 p-4 rounded-xl border border-slate-800 text-xs custom-scrollbar">
@@ -1004,10 +1225,12 @@ export default function App() {
               </div>
             )}
 
-           <div className={`${isAiMirror ? 'h-[32%]' : 'h-[45%]'} flex gap-4 justify-center items-center px-4 custom-scrollbar`}>
-              {groupLands(state.ai.board).map((group, i) => (
-                 <StackedLandGroup key={i} lands={group} official={useOfficialCards} state={state} zone="board" onZoom={setZoomedCard} onClick={(card) => handleCardClick(card, 'board')} />
-              ))}
+           <div className={`${isAiMirror ? 'h-[32%]' : 'h-[45%]'} flex items-center px-3 sm:px-4 overflow-x-auto overflow-y-visible custom-scrollbar`}>
+              <div className="flex items-center gap-2 sm:gap-3 mx-auto min-w-max py-2">
+                {groupLands(state.ai.board).map((group, i) => (
+                   <StackedLandGroup key={i} lands={group} official={useOfficialCards} state={state} zone="board" onZoom={setZoomedCard} onClick={(card) => handleCardClick(card, 'board')} />
+                ))}
+              </div>
            </div>
            <div className="h-[50%] flex gap-2 justify-center items-center px-4 custom-scrollbar mt-1">
               {state.ai.board.filter(c => !c.isLand).map(c => <Card key={c.id} card={c} zone="board" official={useOfficialCards} onZoom={setZoomedCard} targetable={isValidTarget(c, 'board', state)} onClick={(card) => handleCardClick(card, 'board')} />)}
@@ -1045,7 +1268,12 @@ export default function App() {
               <div className="flex flex-col">
                  <span className="text-[10px] text-blue-300 font-bold uppercase tracking-wider">{isAiMirror ? 'AI South' : 'You'}</span>
                  <div className="flex gap-2">
-                    <span className="text-xs text-sky-400 font-mono flex items-center gap-1"><Droplet size={10} fill="currentColor"/> {getAvailableMana(state.player.board)}</span>
+                    <span className="text-xs text-sky-400 font-mono flex items-center gap-1"><Droplet size={10} fill="currentColor"/> {getAvailableMana(state.player.board, state, 'player')}</span>
+                    {getManaPool(state, 'player').total > 0 && (
+                      <span className="text-[10px] text-cyan-300 font-mono px-2 py-0.5 rounded-full border border-cyan-500/40 bg-cyan-950/40">
+                        Pool {getManaPool(state, 'player').blue}U
+                      </span>
+                    )}
                  </div>
               </div>
            </div>
@@ -1055,10 +1283,12 @@ export default function App() {
                  <Card key={c.id} card={c} zone="board" official={useOfficialCards} onZoom={setZoomedCard} targetable={isValidTarget(c, 'board', state)} onClick={(card) => handleCardClick(card, 'board')} />
               ))}
            </div>
-           <div className="h-[25%] flex gap-4 justify-center items-center px-4 mt-1">
-              {groupLands(state.player.board).map((group, i) => (
-                 <StackedLandGroup key={i} lands={group} official={useOfficialCards} state={state} zone="board" onZoom={setZoomedCard} onClick={(card) => handleCardClick(card, 'board')} />
-              ))}
+           <div className="h-[25%] flex items-center px-3 sm:px-4 mt-1 overflow-x-auto overflow-y-visible custom-scrollbar">
+              <div className="flex items-center gap-2 sm:gap-3 mx-auto min-w-max py-2">
+                {groupLands(state.player.board).map((group, i) => (
+                   <StackedLandGroup key={i} lands={group} official={useOfficialCards} state={state} zone="board" onZoom={setZoomedCard} onClick={(card) => handleCardClick(card, 'board')} activatablePlayer="player" />
+                ))}
+              </div>
            </div>
             <div className="flex-1 flex items-end justify-center px-2 pb-2 mt-auto z-40 w-full overflow-x-visible">
                <div className="flex justify-center relative h-[100px] sm:h-[130px] w-full max-w-lg pr-12">
@@ -1071,7 +1301,7 @@ export default function App() {
                       >
                          <Card 
                             card={c} zone="hand" official={useOfficialCards} onClick={(card) => handleCardClick(card, 'hand')} onZoom={setZoomedCard}
-                            castable={!isAiMirror && isCastable(c, state)}
+                            castable={!isAiMirror && (isCastable(c, state) || isCyclable(c, state))}
                             style={{ filter: state.priority === 'player' || isAiMirror ? 'none' : 'brightness(0.6)' }}
                             draggable={true} onDragStart={() => setDraggedIdx(i)} onDragOver={(e) => { e.preventDefault(); }}
                             onDrop={() => {

@@ -1,5 +1,11 @@
 node_modules/
 dist/
 .tmp-smoke/
+.tmp-rules-runtime/
+.tmp-training-runtime/
 vite.out.log
 vite.err.log
+serve.out.log
+serve.err.log
+training-output/*.log
+training-output/engine-selfplay-report.json

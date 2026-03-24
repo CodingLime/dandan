@@ -1,6 +1,8 @@
 :root {
   color-scheme: dark;
-  font-family: "Segoe UI", sans-serif;
+  --font-ui: "Segoe UI", Inter, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-arena-display: "Cinzel", "Copperplate Gothic Bold", Georgia, serif;
+  font-family: var(--font-ui);
   background: #020617;
 }
 
@@ -15,8 +17,129 @@ body,
   min-height: 100%;
   height: 100%;
   background: #020617;
+  font-family: var(--font-ui);
 }
 
 body {
   min-width: 320px;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+body,
+button,
+input,
+select,
+textarea,
+.font-sans,
+.font-mono {
+  font-family: var(--font-ui) !important;
+}
+
+.font-arena-display,
+.font-arena-display button,
+.font-arena-display input,
+.font-arena-display select,
+.font-arena-display textarea {
+  font-family: var(--font-arena-display) !important;
+  font-optical-sizing: auto;
+}
+
+@keyframes fish-bob {
+  0%, 100% {
+    transform: translateY(0px) rotate(-1deg);
+  }
+
+  50% {
+    transform: translateY(-4px) rotate(1deg);
+  }
+}
+
+@keyframes bubble-rise-1 {
+  0% {
+    transform: translateY(10px) scale(0.9);
+    opacity: 0.15;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+
+  100% {
+    transform: translateY(-12px) scale(1.08);
+    opacity: 0;
+  }
+}
+
+@keyframes bubble-rise-2 {
+  0% {
+    transform: translateY(8px) scale(0.85);
+    opacity: 0.12;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
+
+  100% {
+    transform: translateY(-10px) scale(1.04);
+    opacity: 0;
+  }
+}
+
+@keyframes bubble-rise-3 {
+  0% {
+    transform: translateY(12px) scale(0.92);
+    opacity: 0.16;
+  }
+
+  55% {
+    opacity: 0.45;
+  }
+
+  100% {
+    transform: translateY(-14px) scale(1.06);
+    opacity: 0;
+  }
+}
+
+.fish-bob {
+  animation: fish-bob 1.8s ease-in-out infinite;
+}
+
+.bubble-rise-1 {
+  animation: bubble-rise-1 1.8s ease-in-out infinite;
+}
+
+.bubble-rise-2 {
+  animation: bubble-rise-2 1.5s ease-in-out infinite 0.2s;
+}
+
+.bubble-rise-3 {
+  animation: bubble-rise-3 1.9s ease-in-out infinite 0.35s;
+}
+
+.land-stack-group {
+  --land-card-width: 64px;
+  --land-card-height: 90px;
+  --land-step: var(--land-step-mobile, 32px);
+  position: relative;
+  flex: 0 0 auto;
+  width: calc(var(--land-card-width) + (var(--land-count, 1) - 1) * var(--land-step));
+  height: calc(var(--land-card-height) + 18px);
+}
+
+.land-stack-card {
+  position: absolute;
+  top: 0;
+  left: calc(var(--land-index, 0) * var(--land-step));
+}
+
+@media (min-width: 640px) {
+  .land-stack-group {
+    --land-card-width: 80px;
+    --land-card-height: 112px;
+    --land-step: var(--land-step-desktop, 40px);
+  }
 }

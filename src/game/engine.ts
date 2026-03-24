@@ -33,7 +33,7 @@ export const CARDS = {
   SANDBAR: buildCard(2161, 'Lonely Sandbar', 'Land', 0, '', "Enters tapped. {T}: Add {U}. Cycling {U}.", null, false, true),
   REMOTE_ISLE: buildCard(2162, 'Remote Isle', 'Land', 0, '', "Enters tapped. {T}: Add {U}. Cycling {2}.", null, false, true),
   SURGICAL_BAY: buildCard(2163, 'The Surgical Bay', 'Land', 0, '', "Enters tapped. {T}: Add {U}. {U}, {T}, Sac: Draw a card.", null, false, true),
-  TEMPLE: buildCard(2164, 'Svyelunite Temple', 'Land', 0, '', "Enters tapped. {T}: Add {U}. {1}{U}, {T}, Sac: Draw a card.", null, false, true)
+  TEMPLE: buildCard(2164, 'Svyelunite Temple', 'Land', 0, '', "Enters tapped. {T}: Add {U}. {T}, Sac: Add {U}{U}.", null, false, true)
 };
 
 const DECKLIST = [
@@ -45,6 +45,8 @@ const DECKLIST = [
   ...Array(2).fill(CARDS.SURGICAL_BAY), ...Array(2).fill(CARDS.TEMPLE), ...Array(2).fill(CARDS.CAPTURE), ...Array(2).fill(CARDS.CHART),
   ...Array(2).fill(CARDS.DAYS_UNDOING), ...Array(2).fill(CARDS.CONTROL_MAGIC)
 ];
+
+export const SHARED_DECK_SIZE = DECKLIST.length;
 
 export const PREDICT_OPTIONS = Array.from(new Set(Object.values(CARDS).map(c => c.name))).sort();
 export const DANDAN_NAME = CARDS.DANDAN.name;
@@ -71,6 +73,8 @@ const normalizePolicy = (policy) => ({
   blockBias: policy.blockBias ?? policy.control ?? 0.5
 });
 export const getLivePolicyWeights = (difficulty) => normalizePolicy(difficulty === 'hard' ? trainedPolicy.weights : DEFAULT_POLICY_WEIGHTS[difficulty]);
+
+const EMPTY_MANA_POOL = { total: 0, blue: 0 };
 
 const getBlueSources = (card) => {
   if (!card.isLand) return 0;
@@ -109,18 +113,30 @@ const getLandType = (card) => card.landType || null;
 const getDandanLandType = (card) => card.dandanLandType || 'Island';
 const boardHasLandType = (board, landType) => board.some(c => c.isLand && getLandType(c) === landType);
 export const controlsIsland = (board) => boardHasLandType(board, 'Island');
-export const getManaStats = (board) => ({
-  total: board.filter(c => c.isLand && !c.tapped).length,
-  blue: board.filter(c => c.isLand && !c.tapped && (c.blueSources || 0) > 0).length
+const isCreatureCard = (card) => Boolean(card) && (card.type?.includes('Creature') || card.name === DANDAN_NAME);
+const normalizeManaPool = (pool = EMPTY_MANA_POOL) => ({
+  total: pool?.total || 0,
+  blue: pool?.blue || 0
 });
-const canPayCost = (board, totalCost, blueCost = 0) => {
-  const mana = getManaStats(board);
-  return mana.total >= totalCost && mana.blue >= blueCost;
+export const getManaStats = (board, pool = EMPTY_MANA_POOL) => {
+  const normalizedPool = normalizeManaPool(pool);
+  return {
+    total: board.filter(c => c.isLand && !c.tapped).length + normalizedPool.total,
+    blue: board.filter(c => c.isLand && !c.tapped && (c.blueSources || 0) > 0).length + normalizedPool.blue
+  };
 };
-const tapMana = (board, totalCost, blueCost = 0) => {
+const cloneBoard = (board) => board.map(card => ({ ...card }));
+const spendMana = (board, pool = EMPTY_MANA_POOL, totalCost, blueCost = 0) => {
   let remainingTotal = totalCost;
   let remainingBlue = blueCost;
-  const nextBoard = board.map(card => ({ ...card }));
+  const nextBoard = cloneBoard(board);
+  const nextPool = normalizeManaPool(pool);
+
+  const spendBluePool = Math.min(nextPool.blue, remainingBlue);
+  nextPool.blue -= spendBluePool;
+  nextPool.total -= spendBluePool;
+  remainingBlue -= spendBluePool;
+  remainingTotal -= spendBluePool;
 
   nextBoard.forEach(card => {
     if (remainingBlue > 0 && card.isLand && !card.tapped && (card.blueSources || 0) > 0) {
@@ -130,6 +146,22 @@ const tapMana = (board, totalCost, blueCost = 0) => {
     }
   });
 
+  const spendNonBluePool = Math.min(Math.max(0, nextPool.total - nextPool.blue), remainingTotal);
+  nextPool.total -= spendNonBluePool;
+  remainingTotal -= spendNonBluePool;
+
+  nextBoard.forEach(card => {
+    if (remainingTotal > 0 && card.isLand && !card.tapped && (card.blueSources || 0) === 0) {
+      card.tapped = true;
+      remainingTotal--;
+    }
+  });
+
+  const spendBluePoolForGeneric = Math.min(nextPool.blue, remainingTotal);
+  nextPool.blue -= spendBluePoolForGeneric;
+  nextPool.total -= spendBluePoolForGeneric;
+  remainingTotal -= spendBluePoolForGeneric;
+
   nextBoard.forEach(card => {
     if (remainingTotal > 0 && card.isLand && !card.tapped) {
       card.tapped = true;
@@ -137,8 +169,29 @@ const tapMana = (board, totalCost, blueCost = 0) => {
     }
   });
 
-  return nextBoard;
+  return { board: nextBoard, pool: nextPool };
 };
+const canPayCost = (board, pool, totalCost, blueCost = 0) => {
+  const mana = getManaStats(board, pool);
+  return mana.total >= totalCost && mana.blue >= blueCost;
+};
+const clearFloatingMana = (state) => {
+  state.floatingMana = {
+    player: { total: 0, blue: 0 },
+    ai: { total: 0, blue: 0 }
+  };
+  return state;
+};
+const addFloatingMana = (state, player, total, blue = total) => {
+  const current = normalizeManaPool(state.floatingMana?.[player]);
+  state.floatingMana[player] = {
+    total: current.total + total,
+    blue: current.blue + blue
+  };
+};
+export const getManaPool = (state, player = 'player') => normalizeManaPool(state.floatingMana?.[player]);
+export const getAvailableMana = (board, state = null, player = 'player') => getManaStats(board, state ? getManaPool(state, player) : EMPTY_MANA_POOL).total;
+export const getAvailableBlueMana = (board, state = null, player = 'player') => getManaStats(board, state ? getManaPool(state, player) : EMPTY_MANA_POOL).blue;
 
 // --- GAME STATE ENGINE ---
 export const initialState = {
@@ -149,14 +202,12 @@ export const initialState = {
   difficulty: 'medium',
   player: { life: 20, hand: [], board: [], landsPlayed: 0 },
   ai: { life: 20, hand: [], board: [], landsPlayed: 0 },
+  floatingMana: { player: { total: 0, blue: 0 }, ai: { total: 0, blue: 0 } },
   hasAttacked: { player: false, ai: false },
   hasBlocked: { player: false, ai: false },
   extraTurns: { player: 0, ai: 0 },
   winner: null, log: [], stackResolving: false
 };
-
-export const getAvailableMana = (board) => getManaStats(board).total;
-export const getAvailableBlueMana = (board) => getManaStats(board).blue;
 const untapBoard = (board) => board.map(c => ({ ...c, tapped: false, summoningSickness: false, attacking: false, blocking: false }));
 
 const drawCards = (s, player, count) => {
@@ -178,6 +229,7 @@ const drawAlternating = (s, firstPlayer, count) => {
 };
 
 const syncControlEffects = (state) => {
+  let changed = false;
   const auraMap = {};
   ['player', 'ai'].forEach(controller => {
     state[controller].board.forEach(card => {
@@ -201,11 +253,15 @@ const syncControlEffects = (state) => {
         const released = { ...card, controlledByAuraId: null };
         if (owner === controller) nextBoard.push(released);
         else state[owner].board.push(released);
+        changed = true;
         return;
       }
 
       if (aura.controller === controller) nextBoard.push(card);
-      else state[aura.controller].board.push(card);
+      else {
+        state[aura.controller].board.push(card);
+        changed = true;
+      }
     });
     state[controller].board = nextBoard;
   });
@@ -220,37 +276,65 @@ const syncControlEffects = (state) => {
 
       const enchantedStillExists = state.player.board.some(c => c.id === card.enchantedId) || state.ai.board.some(c => c.id === card.enchantedId);
       if (enchantedStillExists) nextBoard.push(card);
-      else state.graveyard.push({ ...card, enchantedId: null });
+      else {
+        state.graveyard.push({ ...card, enchantedId: null });
+        changed = true;
+      }
     });
     state[controller].board = nextBoard;
   });
 
-  return state;
+  return { state, changed };
 };
 
 const checkStateBasedActions = (state) => {
-  let newState = { ...state };
+  let newState = {
+    ...state,
+    player: { ...state.player, board: [...state.player.board] },
+    ai: { ...state.ai, board: [...state.ai.board] },
+    graveyard: [...state.graveyard],
+    log: [...state.log]
+  };
   let changesMade = false;
-  ['player', 'ai'].forEach(p => {
-    const dandans = newState[p].board.filter(c => c.name === DANDAN_NAME);
-    const deadDandans = dandans.filter(c => !boardHasLandType(newState[p].board, getDandanLandType(c)));
-    if (deadDandans.length > 0) {
-      newState[p].board = newState[p].board.filter(c => !deadDandans.includes(c));
-      newState.graveyard = [...newState.graveyard, ...deadDandans];
-      newState.log = [...newState.log, `${p === 'player' ? 'Your' : "AI's"} DandÃ¢ns died (no ${getDandanLandType(deadDandans[0])}s).`];
-      changesMade = true;
-    }
-    if (newState[p].life <= 0 && !newState.winner) {
-      newState.winner = p === 'player' ? 'ai' : 'player'; changesMade = true;
-    }
-  });
+
+  for (let pass = 0; pass < 4; pass++) {
+    let changedThisPass = false;
+    const syncResult = syncControlEffects(newState);
+    newState = syncResult.state;
+    changedThisPass = changedThisPass || syncResult.changed;
+
+    ['player', 'ai'].forEach(p => {
+      const dandans = newState[p].board.filter(c => c.name === DANDAN_NAME);
+      const deadDandans = dandans.filter(c => !boardHasLandType(newState[p].board, getDandanLandType(c)));
+      if (deadDandans.length > 0) {
+        newState[p].board = newState[p].board.filter(c => !deadDandans.includes(c));
+        newState.graveyard = [...newState.graveyard, ...deadDandans];
+        newState.log = [...newState.log, `${p === 'player' ? 'Your' : "AI's"} DandÃ¢ns died (no ${getDandanLandType(deadDandans[0])}s).`];
+        changedThisPass = true;
+      }
+      if (newState[p].life <= 0 && !newState.winner) {
+        newState.winner = p === 'player' ? 'ai' : 'player';
+        changedThisPass = true;
+      }
+    });
+
+    changesMade = changesMade || changedThisPass;
+    if (!changedThisPass) break;
+  }
+
   return changesMade ? newState : state;
 };
 
-const getActivationCost = (cardName) => {
-  if (cardName === 'The Surgical Bay') return 1;
-  if (cardName === 'Svyelunite Temple') return 2;
-  if (cardName === 'Haunted Fengraf') return 3;
+const getActivationDetails = (cardName) => {
+  if (cardName === 'The Surgical Bay') return { total: 1, blue: 1, effect: 'draw' };
+  if (cardName === 'Svyelunite Temple') return { total: 0, blue: 0, effect: 'double_blue' };
+  if (cardName === 'Haunted Fengraf') return { total: 3, blue: 0, effect: 'fengraf' };
+  return null;
+};
+
+const getCyclingCost = (cardName) => {
+  if (cardName === 'Lonely Sandbar') return { total: 1, blue: 1 };
+  if (cardName === 'Remote Isle') return { total: 2, blue: 0 };
   return null;
 };
 
@@ -259,21 +343,31 @@ export const isActivatable = (card, state, player = 'player') => {
   if (state.pendingTargetSelection || state.pendingAction) return false;
   if (card.tapped || !card.isLand) return false;
   
-  const cost = getActivationCost(card.name);
-  if (cost === null) return false;
+  const activation = getActivationDetails(card.name);
+  if (!activation) return false;
 
-  const blueCost = ['The Surgical Bay', 'Svyelunite Temple'].includes(card.name) ? 1 : 0;
-  if (!canPayCost(state[player].board.filter(c => c.id !== card.id), cost, blueCost)) return false;
+  if (!canPayCost(state[player].board.filter(c => c.id !== card.id), getManaPool(state, player), activation.total, activation.blue)) return false;
   
-  if (card.name === 'Haunted Fengraf' && !state.graveyard.some(c => c.type.includes('Creature'))) return false;
+  if (card.name === 'Haunted Fengraf' && !state.graveyard.some(isCreatureCard)) return false;
 
   return true;
+};
+
+export const isCyclable = (card, state, player = 'player') => {
+  if (state.priority !== player) return false;
+  if (state.pendingTargetSelection || state.pendingAction) return false;
+  if (!state[player].hand.some(c => c.id === card.id)) return false;
+
+  const cyclingCost = getCyclingCost(card.name);
+  if (!cyclingCost) return false;
+
+  return canPayCost(state[player].board, getManaPool(state, player), cyclingCost.total, cyclingCost.blue);
 };
 
 export const isCastable = (card, state, player = 'player') => {
   if (state.priority !== player) return false;
   if (state.pendingTargetSelection || state.pendingAction) return false;
-  if (!canPayCost(state[player].board, card.cost, card.blueRequirement || 0)) return false;
+  if (!canPayCost(state[player].board, getManaPool(state, player), card.cost, card.blueRequirement || 0)) return false;
   
   const isMainPhase = state.phase === 'main1' || state.phase === 'main2';
   if (card.isLand) {
@@ -322,6 +416,7 @@ export const checkHasActions = (s, p) => {
   if (s.turn !== p && s.phase === 'declare_blockers' && hasValidBlocker) return true;
   
   for (const c of s[p].hand) {
+    if (isCyclable(c, s, p)) return true;
     if (isCastable(c, s, p)) {
         if (s.stack.length === 0) {
            if (s.phase === 'declare_attackers' && (!oppHasIsland || !hasValidAttacker) && s[s.turn].board.filter(x=>x.attacking).length === 0) continue;
@@ -364,7 +459,7 @@ const defaultEffects = {
   playLand: () => {},
   playCast: () => {},
   playResolve: () => {},
-  playPhase: () => {}
+  playPhase: (_phase) => {}
 };
 
 export const createGameReducer = (effects = defaultEffects) => {
@@ -373,6 +468,9 @@ export const createGameReducer = (effects = defaultEffects) => {
     const logAction = (msg) => { s.log = [msg, ...s.log].slice(0, 15); };
 
   switch (action.type) {
+    case 'RETURN_TO_MENU':
+      return { ...initialState };
+
     case 'START_GAME':
       effects.initAudio();
       const gameMode = action.mode || 'player';
@@ -387,6 +485,7 @@ export const createGameReducer = (effects = defaultEffects) => {
          phase: gameMode === 'ai_vs_ai' ? 'upkeep' : 'mulligan', turn: 'player', priority: 'player', mulliganCount: 0, isFirstTurn: true,
          player: { life: 20, hand: [], board: [], landsPlayed: 0 },
          ai: { life: 20, hand: [], board: [], landsPlayed: 0 },
+         floatingMana: { player: { total: 0, blue: 0 }, ai: { total: 0, blue: 0 } },
          hasAttacked: { player: false, ai: false },
          hasBlocked: { player: false, ai: false },
          extraTurns: { player: 0, ai: 0 },
@@ -397,6 +496,7 @@ export const createGameReducer = (effects = defaultEffects) => {
       return s;
 
     case 'MULLIGAN':
+      if ((s.mulliganCount || 0) >= 7) return s;
       s.deck = [...s.deck, ...s.player.hand];
       s.player.hand = [];
       for (let i = s.deck.length - 1; i > 0; i--) {
@@ -428,6 +528,7 @@ export const createGameReducer = (effects = defaultEffects) => {
 
     case 'PLAY_LAND':
       if (s.turn !== action.player || s.phase === 'declare_attackers' || s.phase === 'declare_blockers' || s.phase === 'upkeep' || s[action.player].landsPlayed >= 1) return s;
+      if (s.pendingAction?.type === 'HAND_LAND_ACTION') s.pendingAction = null;
       const landIdx = s[action.player].hand.findIndex(c => c.id === action.cardId);
       if (landIdx > -1) {
         effects.playLand();
@@ -474,11 +575,52 @@ export const createGameReducer = (effects = defaultEffects) => {
       return checkStateBasedActions(s);
 
     case 'PROMPT_ACTIVATE_LAND':
-      const landCost = getActivationCost(action.cardName);
+      const landActivation = getActivationDetails(action.cardName);
       const promptLand = s.player.board.find(c => c.id === action.cardId);
       if (!promptLand || !isActivatable(promptLand, s, 'player')) return s;
-      s.pendingAction = { type: 'ACTIVATE_LAND', cardId: action.cardId, cardName: action.cardName, cost: landCost };
+      s.pendingAction = { type: 'ACTIVATE_LAND', cardId: action.cardId, cardName: action.cardName, activation: landActivation };
       return s;
+
+    case 'PROMPT_HAND_LAND_ACTION': {
+      const handCard = s.player.hand.find(c => c.id === action.cardId);
+      if (!handCard || !handCard.isLand) return s;
+      const cyclingCost = getCyclingCost(handCard.name);
+      const canPlay = isCastable(handCard, s, 'player');
+      const canCycle = isCyclable(handCard, s, 'player');
+      if (!canPlay && !canCycle) return s;
+      s.pendingAction = {
+        type: 'HAND_LAND_ACTION',
+        cardId: handCard.id,
+        cardName: handCard.name,
+        canPlay,
+        canCycle,
+        cyclingCost: cyclingCost?.total ?? null
+      };
+      return s;
+    }
+
+    case 'CYCLE_CARD': {
+      const p = action.player;
+      const handIdx = s[p].hand.findIndex(c => c.id === action.cardId);
+      if (handIdx === -1) return s;
+      const card = s[p].hand[handIdx];
+      const cyclingCost = getCyclingCost(card.name);
+      const cycleValidationState = s.pendingAction?.type === 'HAND_LAND_ACTION' && s.pendingAction.cardId === action.cardId
+        ? { ...s, pendingAction: null }
+        : s;
+      if (!cyclingCost || !isCyclable(card, cycleValidationState, p)) return s;
+
+      s.pendingAction = null;
+      const cyclePayment = spendMana(s[p].board, getManaPool(s, p), cyclingCost.total, cyclingCost.blue);
+      s[p].board = cyclePayment.board;
+      s.floatingMana[p] = cyclePayment.pool;
+      const [cycledCard] = s[p].hand.splice(handIdx, 1);
+      s.graveyard.push(cycledCard);
+      drawCards(s, p, 1);
+      s.consecutivePasses = 0;
+      logAction(`${p} cycled ${cycledCard.name}.`);
+      return checkStateBasedActions(s);
+    }
 
     case 'CANCEL_TARGETING':
       s.pendingTargetSelection = null;
@@ -515,9 +657,11 @@ export const createGameReducer = (effects = defaultEffects) => {
         target = s[opp].board.find(c => c.name === 'DandÃ¢n') || s[opp].board.find(c => c.isLand) || s[p].board.find(c => c.isLand);
       }
 
-      if (!canPayCost(s[p].board, card.cost, card.blueRequirement || 0)) return s;
+      if (!canPayCost(s[p].board, getManaPool(s, p), card.cost, card.blueRequirement || 0)) return s;
       effects.playCast();
-      s[p].board = tapMana(s[p].board, card.cost, card.blueRequirement || 0);
+      const castPayment = spendMana(s[p].board, getManaPool(s, p), card.cost, card.blueRequirement || 0);
+      s[p].board = castPayment.board;
+      s.floatingMana[p] = castPayment.pool;
       s[p].hand.splice(handIdx, 1);
       s.stack.push({ card, controller: p, target });
       s.consecutivePasses = 0; s.priority = p === 'player' ? 'ai' : 'player'; 
@@ -536,9 +680,11 @@ export const createGameReducer = (effects = defaultEffects) => {
       if (action.targetZone === 'stack') targetObj = s.stack.find(c => c.card.id === action.targetId);
       if (action.targetZone === 'board') targetObj = s.player.board.find(c => c.id === action.targetId) || s.ai.board.find(c => c.id === action.targetId);
 
-      if (!canPayCost(s.player.board, card.cost, card.blueRequirement || 0)) return { ...s, pendingTargetSelection: null };
+      if (!canPayCost(s.player.board, getManaPool(s, 'player'), card.cost, card.blueRequirement || 0)) return { ...s, pendingTargetSelection: null };
       effects.playCast();
-      s.player.board = tapMana(s.player.board, card.cost, card.blueRequirement || 0);
+      const targetCastPayment = spendMana(s.player.board, getManaPool(s, 'player'), card.cost, card.blueRequirement || 0);
+      s.player.board = targetCastPayment.board;
+      s.floatingMana.player = targetCastPayment.pool;
       s.player.hand.splice(handIdx, 1);
       
       s.stack.push({ card, controller: 'player', target: targetObj });
@@ -828,39 +974,51 @@ export const createGameReducer = (effects = defaultEffects) => {
            logAction(`You discarded down to 7 cards.`);
            s.pendingAction = null;
            return reducer(s, { type: 'NEXT_TURN' });
-       } else if (s.pendingAction.type === 'ACTIVATE_LAND') {
+        } else if (s.pendingAction.type === 'ACTIVATE_LAND') {
             const landIdx = s.player.board.findIndex(c => c.id === s.pendingAction.cardId);
             if (landIdx > -1) {
                 const landToActivate = s.player.board[landIdx];
-                if (!isActivatable(landToActivate, s, 'player')) {
+                const activationState = { ...s, pendingAction: null };
+                if (!isActivatable(landToActivate, activationState, 'player')) {
                     s.pendingAction = null;
                     return s;
                 }
 
-                const activationBlueCost = ['The Surgical Bay', 'Svyelunite Temple'].includes(s.pendingAction.cardName) ? 1 : 0;
+                const activation = s.pendingAction.activation || getActivationDetails(s.pendingAction.cardName);
                 const boardWithoutLand = s.player.board.filter(c => c.id !== s.pendingAction.cardId);
-                s.player.board = tapMana(boardWithoutLand, s.pendingAction.cost, activationBlueCost);
+                const activationPayment = spendMana(boardWithoutLand, getManaPool(s, 'player'), activation.total, activation.blue);
+                s.player.board = activationPayment.board;
+                s.floatingMana.player = activationPayment.pool;
 
                 const sacrificedLand = { ...landToActivate, tapped: true, attacking: false, blocking: false };
                 s.graveyard.push(sacrificedLand);
                 
                 if (s.pendingAction.cardName === 'The Surgical Bay' || s.pendingAction.cardName === 'Svyelunite Temple') {
-                    drawCards(s, 'player', 1);
-                    logAction(`Sacrificed ${s.pendingAction.cardName} to draw a card.`);
+                    if (s.pendingAction.cardName === 'The Surgical Bay') {
+                        drawCards(s, 'player', 1);
+                        logAction(`Sacrificed ${s.pendingAction.cardName} to draw a card.`);
+                    } else {
+                        addFloatingMana(s, 'player', 2, 2);
+                        logAction(`Sacrificed Svyelunite Temple to add {U}{U}.`);
+                    }
                } else if (s.pendingAction.cardName === 'Haunted Fengraf') {
-                   const creatures = s.graveyard.filter(c => c.type.includes('Creature'));
+                   const creatures = s.graveyard.filter(isCreatureCard);
                    if (creatures.length > 0) {
-                       const randIdx = Math.floor(Math.random() * creatures.length);
-                       const selectedCreature = creatures[randIdx];
-                       s.graveyard = s.graveyard.filter(c => c.id !== selectedCreature.id);
-                       selectedCreature.owner = 'player';
-                       s.player.hand.push(selectedCreature);
-                       logAction(`Sacrificed Fengraf. Returned ${selectedCreature.name}.`);
-                   }
-               }
-           }
-       } else if (s.pendingAction.type === 'MYSTIC_SANCTUARY') {
-           if (action.selectedCardId) {
+                        const randIdx = Math.floor(Math.random() * creatures.length);
+                        const selectedCreature = creatures[randIdx];
+                        s.graveyard = s.graveyard.filter(c => c.id !== selectedCreature.id);
+                        selectedCreature.owner = 'player';
+                        s.player.hand.push(selectedCreature);
+                        logAction(`Sacrificed Fengraf. Returned ${selectedCreature.name}.`);
+                    } else {
+                        logAction(`Sacrificed Fengraf, but there was no creature to return.`);
+                    }
+                 }
+            }
+        } else if (s.pendingAction.type === 'HAND_LAND_ACTION') {
+            s.pendingAction = null;
+        } else if (s.pendingAction.type === 'MYSTIC_SANCTUARY') {
+            if (action.selectedCardId) {
                const targetIdx = s.graveyard.findIndex(c => c.id === action.selectedCardId);
                if (targetIdx > -1) {
                    const [spell] = s.graveyard.splice(targetIdx, 1);
@@ -879,6 +1037,7 @@ export const createGameReducer = (effects = defaultEffects) => {
        return s;
 
     case 'NEXT_PHASE':
+      clearFloatingMana(s);
       s.consecutivePasses = 0;
       if (s.phase === 'upkeep') {
          if (s.isFirstTurn) {
@@ -956,6 +1115,7 @@ export const createGameReducer = (effects = defaultEffects) => {
       return s;
 
     case 'NEXT_TURN':
+      clearFloatingMana(s);
       if (s.extraTurns[s.turn] > 0) {
           s.extraTurns[s.turn]--;
           logAction(`-- ${s.turn}'s Extra Turn! --`);
