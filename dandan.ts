@@ -1175,7 +1175,7 @@ export default function App() {
            }`}
            style={{ WebkitTapHighlightColor: 'transparent' }}
          >
-           {state.priority === 'player' && !state.stackResolving && !isAutoPassing && <div className="absolute inset-0 bg-white/20 animate-pulse mix-blend-overlay pointer-events-none"></div>}
+           {state.priority === 'player' && !state.stackResolving && !isAutoPassing && <div className="arena-pass-button-glow" aria-hidden="true"></div>}
            {passIcon}
            <span className="text-[8px] sm:text-[10px] font-black tracking-widest text-center leading-tight px-1">{passLabel}</span>
          </button>

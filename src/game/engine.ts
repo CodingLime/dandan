@@ -225,7 +225,7 @@ export const getAvailableBlueMana = (board, state = null, player = 'player') => 
 
 // --- GAME STATE ENGINE ---
 export const initialState = {
-  started: false, deck: [], graveyard: [], stack: [], turn: 'player', phase: 'mulligan', priority: 'player', 
+  started: false, deck: [], graveyard: [], exile: [], stack: [], turn: 'player', phase: 'mulligan', priority: 'player', 
   consecutivePasses: 0, actionCount: 0, pendingTargetSelection: null, pendingAction: null,
   mulliganCount: 0, isFirstTurn: true,
   gameMode: 'player',
@@ -805,7 +805,16 @@ const getBoardAfterTransformingPermanent = (board, permanentId) => board.map(car
   return card;
 });
 const getBoardAfterRemovingPermanent = (board, permanentId) => board.filter(card => card.id !== permanentId);
-const countDandansLosingSupport = (currentBoard, nextBoard) => currentBoard.filter(card => card.name === DANDAN_NAME && isDandanSupported(card, currentBoard) && !isDandanSupported(card, nextBoard)).length;
+const getCardVersionFromBoard = (board, card) => board.find(entry => entry.id === card.id) || null;
+const isDandanSupportedOnBoard = (card, board) => {
+  const boardCard = getCardVersionFromBoard(board, card) || card;
+  return isDandanSupported(boardCard, board);
+};
+const countDandansLosingSupport = (currentBoard, nextBoard) => currentBoard.filter(card => (
+  card.name === DANDAN_NAME &&
+  isDandanSupported(card, currentBoard) &&
+  !isDandanSupportedOnBoard(card, nextBoard)
+)).length;
 const spellWouldSelfDestruct = (state, spell) => spell?.card?.name === DANDAN_NAME && !boardHasLandType(state[spell.controller].board, getDandanLandType(spell.card));
 const getBattlefieldCard = (state, cardId) => state.player.board.find(card => card.id === cardId) || state.ai.board.find(card => card.id === cardId) || null;
 const getBattlefieldController = (state, cardId) => {
@@ -835,7 +844,7 @@ const getThreatenedFriendlyCreaturesFromSpell = (state, actor, stackSpell) => {
   const threatened = actorBoard.filter(card => (
     card.name === DANDAN_NAME &&
     isDandanSupported(card, actorBoard) &&
-    !isDandanSupported(card, nextBoard)
+    !isDandanSupportedOnBoard(card, nextBoard)
   ));
 
   if (target.name === DANDAN_NAME) {
@@ -1003,7 +1012,12 @@ const getTransformTargetCandidates = (state, actor) => {
   const candidates = board.filter(card => card.name === DANDAN_NAME || card.isLand).map(card => {
     const nextBoard = getBoardAfterTransformingPermanent(board, card.id);
     const killedDandans = countDandansLosingSupport(board, nextBoard);
-    const attackingKills = board.filter(permanent => permanent.name === DANDAN_NAME && permanent.attacking && isDandanSupported(permanent, board) && !isDandanSupported(permanent, nextBoard)).length;
+    const attackingKills = board.filter(permanent => (
+      permanent.name === DANDAN_NAME &&
+      permanent.attacking &&
+      isDandanSupported(permanent, board) &&
+      !isDandanSupportedOnBoard(permanent, nextBoard)
+    )).length;
     const blueLoss = Math.max(0, getBlueSourcesInPlay(board) - getBlueSourcesInPlay(nextBoard));
     const score = killedDandans * 12 + attackingKills * 4 + blueLoss * 3 + (card.name === DANDAN_NAME ? 1.5 : 0);
     return { target: card, score };
@@ -1030,7 +1044,12 @@ const getBounceTargetCandidates = (state, actor) => {
 
     const nextBoard = getBoardAfterRemovingPermanent(board, card.id);
     const killedDandans = countDandansLosingSupport(board, nextBoard);
-    const attackingKills = board.filter(permanent => permanent.name === DANDAN_NAME && permanent.attacking && isDandanSupported(permanent, board) && !isDandanSupported(permanent, nextBoard)).length;
+    const attackingKills = board.filter(permanent => (
+      permanent.name === DANDAN_NAME &&
+      permanent.attacking &&
+      isDandanSupported(permanent, board) &&
+      !isDandanSupportedOnBoard(permanent, nextBoard)
+    )).length;
     const blueLoss = Math.max(0, getBlueSourcesInPlay(board) - getBlueSourcesInPlay(nextBoard));
     let score = killedDandans * 11 + attackingKills * 4 + blueLoss * 2.5;
     if (card.name === DANDAN_NAME && isDandanSupported(card, board)) score += card.attacking ? 12 : 9;
@@ -2104,7 +2123,7 @@ export const createGameReducer = (effects = defaultEffects) => {
          gameMode,
          difficulty,
          deck: initializeDeck(),
-         graveyard: [], stack: [], log: [], winner: null,
+         graveyard: [], exile: [], stack: [], log: [], winner: null,
          phase: gameMode === 'ai_vs_ai' ? 'upkeep' : 'mulligan', turn: 'player', priority: 'player', mulliganCount: 0, isFirstTurn: true,
          player: { life: 20, hand: [], board: [], landsPlayed: 0 },
          ai: { life: 20, hand: [], board: [], landsPlayed: 0 },
@@ -2508,16 +2527,18 @@ export const createGameReducer = (effects = defaultEffects) => {
         drawCards(s, spell.controller, 1);
       }
       else if (spell.card.name === "Day's Undoing") {
-        s.graveyard.push(spell.card);
-        s.deck = [...s.deck, ...s.graveyard, ...s.player.hand, ...s.ai.hand];
+        const endsTurn = s.turn === spell.controller;
+        const recycledCards = [...s.graveyard, ...s.player.hand, ...s.ai.hand];
+        s.deck = [...s.deck, ...recycledCards];
         s.graveyard = []; s.player.hand = []; s.ai.hand = [];
         for (let i = s.deck.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [s.deck[i], s.deck[j]] = [s.deck[j], s.deck[i]];
         }
         drawAlternating(s, s.turn, 7);
-        logAction(`Day's Undoing resets hands and graveyard!`);
-        if (s.turn === spell.controller) {
+        if (endsTurn) {
+            s.exile.push(spell.card);
+            logAction(`Day's Undoing resets hands and graveyard, then is exiled.`);
             s[s.turn].board.forEach(c => { c.attacking = false; c.blocking = false; });
             s[s.turn === 'player' ? 'ai' : 'player'].board.forEach(c => { c.attacking = false; c.blocking = false; });
             s.phase = 'main2';
@@ -2526,6 +2547,8 @@ export const createGameReducer = (effects = defaultEffects) => {
             s.consecutivePasses = 0;
             return reducer(s, { type: 'NEXT_PHASE' });
         }
+        s.graveyard.push(spell.card);
+        logAction(`Day's Undoing resets hands and graveyard!`);
       }
       else if (spell.card.name === 'Capture of Jingzhou') {
         s.graveyard.push(spell.card);

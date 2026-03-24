@@ -399,6 +399,45 @@ test('medium AI bounces the only Island to kill multiple Dandans', () => {
   expect(action.target?.id === playerIsland.id, 'Medium AI should bounce the only Island to kill both Dandans');
 });
 
+test('medium AI targets the Dandan with Crystal Spray when changing one land would not kill it', () => {
+  const crystalSpray = makeCard(CARDS.CRYSTAL_SPRAY, { id: 'spray-kill-fish', owner: 'ai' });
+  const aiIslands = [
+    makeCard(CARDS.ISLAND_1, { id: 'spray-ai-island-1' }),
+    makeCard(CARDS.ISLAND_2, { id: 'spray-ai-island-2' }),
+    makeCard(CARDS.ISLAND_4, { id: 'spray-ai-island-3' })
+  ];
+  const playerIslandA = makeCard(CARDS.ISLAND_1, { id: 'spray-player-island-a' });
+  const playerIslandB = makeCard(CARDS.ISLAND_2, { id: 'spray-player-island-b' });
+  const playerDandan = makeCard(CARDS.DANDAN, {
+    id: 'spray-player-dandan',
+    owner: 'player',
+    summoningSickness: false
+  });
+
+  const state = makeState({
+    turn: 'ai',
+    phase: 'main1',
+    priority: 'ai',
+    ai: {
+      life: 20,
+      hand: [crystalSpray],
+      board: aiIslands,
+      landsPlayed: 0
+    },
+    player: {
+      life: 20,
+      hand: [],
+      board: [playerIslandA, playerIslandB, playerDandan],
+      landsPlayed: 0
+    }
+  });
+
+  const action = chooseAiAction(state, 'ai', 'medium', tacticalPolicy);
+  expect(action.type === 'CAST_SPELL', `Medium AI should cast Crystal Spray here, got ${action.type}`);
+  expect(action.cardId === crystalSpray.id, 'Medium AI did not choose Crystal Spray for the kill line');
+  expect(action.target?.id === playerDandan.id, 'Medium AI should target the Dandan itself when one land change would leave it alive');
+});
+
 test('medium AI bounces Control Magic to reclaim its stolen Dandan', () => {
   const aura = makeCard(CARDS.CONTROL_MAGIC, {
     id: 'ai-rescue-aura',
@@ -909,6 +948,47 @@ test('older Control Magic resumes control when the newer aura leaves', () => {
   const resumedDandan = state.player.board.find((card) => card.id === stackedDandan.id);
   expect(resumedDandan.controlledByAuraId === firstAura.id, 'Resumed Dandan is not linked to the older Control Magic');
   expect(state.ai.board.every((card) => card.id !== stackedDandan.id), 'Dandan stayed with the newer controller after that aura left');
+});
+
+test('Day\'s Undoing exiles itself instead of joining the shuffled graveyard', () => {
+  const islands = [
+    makeCard(CARDS.ISLAND_1, { id: 'undoing-island-1' }),
+    makeCard(CARDS.ISLAND_1, { id: 'undoing-island-2' }),
+    makeCard(CARDS.ISLAND_1, { id: 'undoing-island-3' })
+  ];
+  const undoing = makeCard(CARDS.DAYS_UNDOING, { id: 'undoing-1', owner: 'player' });
+  const graveSpell = makeCard(CARDS.BRAINSTORM, { id: 'undoing-grave-spell', owner: 'player' });
+  const deckCards = Array.from({ length: 14 }, (_, index) => makeCard(
+    index % 2 === 0 ? CARDS.ISLAND_2 : CARDS.PREDICT,
+    { id: `undoing-deck-${index}`, owner: index % 2 === 0 ? null : 'ai' }
+  ));
+
+  let state = makeState({
+    player: {
+      life: 20,
+      hand: [undoing],
+      board: islands,
+      landsPlayed: 0
+    },
+    ai: {
+      life: 20,
+      hand: [],
+      board: [],
+      landsPlayed: 0
+    },
+    graveyard: [graveSpell],
+    deck: deckCards
+  });
+
+  state = reducer(state, { type: 'CAST_SPELL', player: 'player', cardId: undoing.id });
+  state = reducer(state, { type: 'PASS_PRIORITY', player: 'ai' });
+  state = reducer(state, { type: 'PASS_PRIORITY', player: 'player' });
+  expect(state.stackResolving === true, 'Day\'s Undoing did not move to stack resolution');
+  state = reducer(state, { type: 'RESOLVE_TOP_STACK' });
+
+  expect(state.exile.some((card) => card.id === undoing.id), 'Day\'s Undoing should exile itself when it ends the turn');
+  expect(!state.graveyard.some((card) => card.id === undoing.id), 'Day\'s Undoing incorrectly went to the graveyard');
+  expect(!state.deck.some((card) => card.id === undoing.id), 'Day\'s Undoing incorrectly got shuffled back into the library');
 });
 
 test('Capture of Jingzhou adds an extra turn without skipping the current main phase', () => {
