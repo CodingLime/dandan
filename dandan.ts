@@ -1183,10 +1183,11 @@ export default function App() {
          <button
            disabled={state.priority !== 'player' || state.stackResolving || isAutoPassing}
            onClick={() => { AudioEngine.init(); dispatch({ type: 'PASS_PRIORITY', player: 'player' }); }}
-           className={`relative group overflow-hidden w-16 h-16 sm:w-20 sm:h-20 rounded-full flex flex-col items-center justify-center gap-1 transition-all shadow-[0_0_25px_rgba(0,0,0,0.8)] border-2 ${
+           className={`relative group overflow-hidden w-16 h-16 sm:w-20 sm:h-20 rounded-full flex flex-col items-center justify-center gap-1 transition-all shadow-[0_0_25px_rgba(0,0,0,0.8)] border-2 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 ${
               isAutoPassing ? 'bg-amber-900 border-amber-500 animate-pulse text-amber-400' :
               state.priority === 'player' && !state.stackResolving ? `${btnColorClass} hover:scale-[1.05]` : 'bg-slate-800 border-slate-700 text-slate-500'
            }`}
+           style={{ WebkitTapHighlightColor: 'transparent' }}
          >
            {state.priority === 'player' && !state.stackResolving && !isAutoPassing && <div className="absolute inset-0 bg-white/20 animate-pulse mix-blend-overlay pointer-events-none"></div>}
            {passIcon}
