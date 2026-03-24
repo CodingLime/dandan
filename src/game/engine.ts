@@ -85,13 +85,14 @@ const getBlueSources = (card) => {
 };
 
 const getBlueRequirement = (manaCost) => (manaCost.match(/\{U\}/g) || []).length;
+const isCreatureTemplate = (card) => Boolean(card) && (card.type?.includes('Creature') || card.name === DANDAN_NAME);
 
 const initializeDeck = () => {
   let deck = DECKLIST.map(card => ({
     ...card,
     id: generateId(),
     tapped: false,
-    summoningSickness: true,
+    summoningSickness: isCreatureTemplate(card),
     attacking: false,
     blocking: false,
     isSwamp: false,
@@ -101,7 +102,8 @@ const initializeDeck = () => {
     blueRequirement: getBlueRequirement(card.manaCost),
     dandanLandType: 'Island',
     enchantedId: null,
-    controlledByAuraId: null
+    controlledByAuraId: null,
+    attachmentOrder: null
   }));
   for (let i = deck.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -114,10 +116,24 @@ const getLandType = (card) => card.landType || null;
 const getDandanLandType = (card) => card.dandanLandType || 'Island';
 const boardHasLandType = (board, landType) => board.some(c => c.isLand && getLandType(c) === landType);
 export const controlsIsland = (board) => boardHasLandType(board, 'Island');
-const isCreatureCard = (card) => Boolean(card) && (card.type?.includes('Creature') || card.name === DANDAN_NAME);
+const isCreatureCard = (card) => isCreatureTemplate(card);
 const normalizeManaPool = (pool = EMPTY_MANA_POOL) => ({
   total: pool?.total || 0,
   blue: pool?.blue || 0
+});
+const clearAttachmentState = (card) => ({
+  ...card,
+  enchantedId: null,
+  controlledByAuraId: null,
+  attachmentOrder: null
+});
+const preparePermanentForZoneChange = (card, overrides = {}) => ({
+  ...clearAttachmentState(card),
+  tapped: false,
+  attacking: false,
+  blocking: false,
+  summoningSickness: isCreatureCard(card),
+  ...overrides
 });
 export const getManaStats = (board, pool = EMPTY_MANA_POOL) => {
   const normalizedPool = normalizeManaPool(pool);
@@ -231,59 +247,64 @@ const drawAlternating = (s, firstPlayer, count) => {
 
 const syncControlEffects = (state) => {
   let changed = false;
-  const auraMap = {};
-  ['player', 'ai'].forEach(controller => {
-    state[controller].board.forEach(card => {
-      if (card.name === 'Control Magic' && card.enchantedId) {
-        auraMap[card.id] = { controller, enchantedId: card.enchantedId };
-      }
-    });
+  const stripBoardMarker = ({ currentController, ...card }) => card;
+  const allBoardCards = ['player', 'ai'].flatMap(controller =>
+    state[controller].board.map(card => ({ ...card, currentController: controller }))
+  );
+  const allCreatures = allBoardCards.filter(card => isCreatureCard(card));
+  const creatureIds = new Set(allCreatures.map(card => card.id));
+  const aurasByCreatureId = {};
+  const nextBoards = { player: [], ai: [] };
+
+  allBoardCards.forEach(card => {
+    if (card.name === 'Control Magic') return;
+    if (isCreatureCard(card)) return;
+    nextBoards[card.currentController].push(stripBoardMarker(card));
   });
 
-  ['player', 'ai'].forEach(controller => {
-    const nextBoard = [];
-    state[controller].board.forEach(card => {
-      if (card.name !== DANDAN_NAME || !card.controlledByAuraId) {
-        nextBoard.push(card);
+  allBoardCards
+    .filter(card => card.name === 'Control Magic')
+    .forEach(card => {
+      if (card.enchantedId && creatureIds.has(card.enchantedId)) {
+        const normalizedAura = {
+          ...card,
+          owner: card.owner || card.currentController,
+          attachmentOrder: card.attachmentOrder ?? 0
+        };
+        if (!aurasByCreatureId[card.enchantedId]) aurasByCreatureId[card.enchantedId] = [];
+        aurasByCreatureId[card.enchantedId].push(normalizedAura);
+        nextBoards[card.currentController].push(stripBoardMarker(normalizedAura));
         return;
       }
 
-      const aura = auraMap[card.controlledByAuraId];
-      const owner = card.owner || controller;
-      if (!aura) {
-        const released = { ...card, controlledByAuraId: null };
-        if (owner === controller) nextBoard.push(released);
-        else state[owner].board.push(released);
-        changed = true;
-        return;
-      }
-
-      if (aura.controller === controller) nextBoard.push(card);
-      else {
-        state[aura.controller].board.push(card);
-        changed = true;
-      }
+      state.graveyard.push({ ...clearAttachmentState(stripBoardMarker(card)), owner: card.owner || card.currentController });
+      changed = true;
     });
-    state[controller].board = nextBoard;
+
+  allCreatures.forEach(card => {
+    const owner = card.owner || card.currentController;
+    const attachedAuras = [...(aurasByCreatureId[card.id] || [])].sort((a, b) => (a.attachmentOrder || 0) - (b.attachmentOrder || 0));
+    const winningAura = attachedAuras.length > 0 ? attachedAuras[attachedAuras.length - 1] : null;
+    const targetController = winningAura ? winningAura.currentController : owner;
+    const controllerChanged = targetController !== card.currentController;
+    const nextControlledByAuraId = winningAura?.id || null;
+    const nextCreature = {
+      ...stripBoardMarker(card),
+      controlledByAuraId: nextControlledByAuraId,
+      summoningSickness: controllerChanged ? true : card.summoningSickness,
+      attacking: controllerChanged ? false : card.attacking,
+      blocking: controllerChanged ? false : card.blocking
+    };
+
+    if (controllerChanged || card.controlledByAuraId !== nextControlledByAuraId) {
+      changed = true;
+    }
+
+    nextBoards[targetController].push(nextCreature);
   });
 
-  ['player', 'ai'].forEach(controller => {
-    const nextBoard = [];
-    state[controller].board.forEach(card => {
-      if (card.name !== 'Control Magic') {
-        nextBoard.push(card);
-        return;
-      }
-
-      const enchantedStillExists = state.player.board.some(c => c.id === card.enchantedId) || state.ai.board.some(c => c.id === card.enchantedId);
-      if (enchantedStillExists) nextBoard.push(card);
-      else {
-        state.graveyard.push({ ...card, enchantedId: null });
-        changed = true;
-      }
-    });
-    state[controller].board = nextBoard;
-  });
+  state.player.board = nextBoards.player;
+  state.ai.board = nextBoards.ai;
 
   return { state, changed };
 };
@@ -309,7 +330,7 @@ const checkStateBasedActions = (state) => {
       const deadDandans = dandans.filter(c => !boardHasLandType(newState[p].board, getDandanLandType(c)));
       if (deadDandans.length > 0) {
         newState[p].board = newState[p].board.filter(c => !deadDandans.includes(c));
-        newState.graveyard = [...newState.graveyard, ...deadDandans];
+        newState.graveyard = [...newState.graveyard, ...deadDandans.map(card => preparePermanentForZoneChange(card))];
         newState.log = [...newState.log, `${p === 'player' ? 'Your' : "AI's"} DandÃ¢ns died (no ${getDandanLandType(deadDandans[0])}s).`];
         changedThisPass = true;
       }
@@ -383,7 +404,7 @@ export const isCastable = (card, state, player = 'player') => {
   if (card.name === 'Unsubstantiate' && state.stack.length === 0 && !anyDandan) return false;
   
   if (['Magical Hack', 'Crystal Spray', 'Metamorphose'].includes(card.name) && state.stack.length === 0 && state.player.board.length === 0 && state.ai.board.length === 0) return false;
-  if (card.name === 'Control Magic' && !state[opp].board.some(b => b.name === 'DandÃ¢n')) return false;
+  if (card.name === 'Control Magic' && ![...state.player.board, ...state.ai.board].some(isCreatureCard)) return false;
 
   return true;
 };
@@ -395,7 +416,7 @@ export const isValidTarget = (card, zone, state) => {
   if (spellName === 'Memory Lapse') return zone === 'stack';
   if (spellName === 'Unsubstantiate') return zone === 'stack' || (zone === 'board' && card.name === 'DandÃ¢n');
   if (['Magical Hack', 'Crystal Spray', 'Metamorphose'].includes(spellName)) return zone === 'board';
-  if (spellName === 'Control Magic') return zone === 'board' && card.name === 'DandÃ¢n' && state.ai.board.some(c => c.id === card.id);
+  if (spellName === 'Control Magic') return zone === 'board' && isCreatureCard(card);
   return false;
 };
 
@@ -405,14 +426,13 @@ export const checkHasActions = (s, p) => {
   if (s.pendingTargetSelection || s.pendingAction) return true;
   
   const opp = p === 'player' ? 'ai' : 'player';
-  const oppHasIsland = controlsIsland(s[opp].board);
-  const hasValidAttacker = s[p].board.some(c => c.name === 'DandÃ¢n' && !c.summoningSickness && !c.tapped);
+  const hasValidAttacker = s[p].board.some(c => c.name === 'DandÃ¢n' && !c.summoningSickness && !c.tapped && boardHasLandType(s[opp].board, getDandanLandType(c)));
   const hasValidBlocker = s[p].board.some(c => c.name === 'DandÃ¢n' && !c.tapped);
 
   if (s.turn === p && s.phase !== 'declare_attackers' && s.phase !== 'declare_blockers' && s.phase !== 'upkeep' && s[p].landsPlayed < 1 && s[p].hand.some(c => c.isLand)) return true;
   
   if (s.turn === p && s.phase === 'declare_attackers') {
-     if (oppHasIsland && hasValidAttacker) return true;
+     if (hasValidAttacker) return true;
   }
   if (s.turn !== p && s.phase === 'declare_blockers' && hasValidBlocker) return true;
   
@@ -420,7 +440,7 @@ export const checkHasActions = (s, p) => {
     if (isCyclable(c, s, p)) return true;
     if (isCastable(c, s, p)) {
         if (s.stack.length === 0) {
-           if (s.phase === 'declare_attackers' && (!oppHasIsland || !hasValidAttacker) && s[s.turn].board.filter(x=>x.attacking).length === 0) continue;
+           if (s.phase === 'declare_attackers' && !hasValidAttacker && s[s.turn].board.filter(x=>x.attacking).length === 0) continue;
            if (s.phase === 'declare_blockers' && s[s.turn === 'player' ? 'ai' : 'player'].board.filter(x=>x.attacking).length === 0) continue;
         }
         return true;
@@ -429,7 +449,7 @@ export const checkHasActions = (s, p) => {
   for (const b of s[p].board) {
     if (isActivatable(b, s, p)) {
         if (s.stack.length === 0) {
-           if (s.phase === 'declare_attackers' && (!oppHasIsland || !hasValidAttacker) && s[s.turn].board.filter(x=>x.attacking).length === 0) continue;
+           if (s.phase === 'declare_attackers' && !hasValidAttacker && s[s.turn].board.filter(x=>x.attacking).length === 0) continue;
            if (s.phase === 'declare_blockers' && s[s.turn === 'player' ? 'ai' : 'player'].board.filter(x=>x.attacking).length === 0) continue;
         }
         return true;
@@ -438,8 +458,19 @@ export const checkHasActions = (s, p) => {
   return false;
 };
 
-const shouldMakeMistake = (difficulty, rate, policy) => Math.random() < Math.max(rate, policy?.mistakeRate ?? 0);
-const getSpellPriority = (card, policy) => {
+const shouldMakeMistake = (rate, policy) => Math.random() < Math.max(rate, policy?.mistakeRate ?? 0);
+export const pickAiPendingCards = (hand, count, policy) => {
+  const preferKeepingLands = hand.filter(card => card.isLand).length < Math.ceil(policy.landLimit ?? 4);
+  return [...hand]
+    .sort((a, b) => {
+      const aScore = (a.isLand ? (preferKeepingLands ? 8 : -4) : 0) - a.cost * (policy.control > policy.aggression ? 0.6 : 0.2);
+      const bScore = (b.isLand ? (preferKeepingLands ? 8 : -4) : 0) - b.cost * (policy.control > policy.aggression ? 0.6 : 0.2);
+      return aScore - bScore;
+    })
+    .slice(0, count)
+    .map(card => card.id);
+};
+export const getSpellPriority = (card, policy) => {
   switch (card.name) {
     case 'Control Magic': return 6 + policy.control * 4;
     case 'Capture of Jingzhou': return 4 + policy.control * 3 + policy.drawBias;
@@ -452,6 +483,434 @@ const getSpellPriority = (card, policy) => {
     case 'Mental Note': return 1 + policy.drawBias;
     default: return card.name === DANDAN_NAME ? 6 + policy.aggression * 4 : 2;
   }
+};
+
+const AI_ETB_TAPPED_LANDS = new Set(['Lonely Sandbar', 'Remote Isle', 'The Surgical Bay', 'Svyelunite Temple', 'Halimar Depths', 'Mystic Sanctuary']);
+const AI_VALUE_INSTANTS = new Set(['Accumulated Knowledge', 'Brainstorm', 'Mental Note', 'Predict', 'Telling Time']);
+const countDandans = (board, predicate = (_card) => true) => board.filter(card => card.name === DANDAN_NAME && predicate(card)).length;
+const isDandanSupported = (card, board) => card?.name === DANDAN_NAME && boardHasLandType(board, getDandanLandType(card));
+export const canDandanAttackDefender = (card, defenderBoard) => card?.name === DANDAN_NAME && boardHasLandType(defenderBoard, getDandanLandType(card));
+const getBlueSourcesInPlay = (board) => board.filter(card => card.isLand && (card.blueSources || 0) > 0).length;
+const getCombatThreat = (defendingBoard, dandanCount) => controlsIsland(defendingBoard) ? dandanCount * 4 : 0;
+const getBoardAfterTransformingPermanent = (board, permanentId) => board.map(card => {
+  if (card.id !== permanentId) return card;
+  if (card.name === DANDAN_NAME) return { ...card, dandanLandType: 'Swamp' };
+  if (card.isLand) return { ...card, landType: 'Swamp', isSwamp: true, blueSources: 0 };
+  return card;
+});
+const getBoardAfterRemovingPermanent = (board, permanentId) => board.filter(card => card.id !== permanentId);
+const countDandansLosingSupport = (currentBoard, nextBoard) => currentBoard.filter(card => card.name === DANDAN_NAME && isDandanSupported(card, currentBoard) && !isDandanSupported(card, nextBoard)).length;
+const spellWouldSelfDestruct = (state, spell) => spell?.card?.name === DANDAN_NAME && !boardHasLandType(state[spell.controller].board, getDandanLandType(spell.card));
+const chooseLandToPlay = (state, actor) => {
+  const lands = state[actor].hand.filter(card => card.isLand);
+  if (lands.length === 0) return null;
+
+  const board = state[actor].board;
+  const islandCount = board.filter(card => getLandType(card) === 'Island').length;
+  const availableBlue = getBlueSourcesInPlay(board);
+  const graveyardSpells = state.graveyard.filter(card => INSTANT_OR_SORCERY_TYPES.some(type => card.type?.includes(type)));
+  const wantsBlueSoon = state[actor].hand.some(card => !card.isLand && (card.blueRequirement || 0) > Math.max(0, availableBlue));
+
+  const scoreLand = (card) => {
+    const sanctuaryUntapped = card.name === 'Mystic Sanctuary' && islandCount >= 3;
+    const entersTapped = AI_ETB_TAPPED_LANDS.has(card.name) && !sanctuaryUntapped;
+    let score = 0;
+
+    score += (card.blueSources || 0) * 4;
+    score += getLandType(card) === 'Island' ? 2.5 : 0;
+    score += entersTapped ? -2.4 : 1.6;
+
+    if (card.name === 'Mystic Sanctuary') score += sanctuaryUntapped && graveyardSpells.length > 0 ? 5 : -1.5;
+    if (card.name === 'Halimar Depths') score += 1.4;
+    if (card.name === 'Lonely Sandbar') score += lands.length > 1 ? 0.8 : 0.2;
+    if (card.name === 'Remote Isle') score += lands.length > 1 ? 0.4 : -0.3;
+    if (card.name === 'Svyelunite Temple') score += wantsBlueSoon ? 1.2 : 0.5;
+    if (card.name === 'The Surgical Bay') score += state[actor].hand.length <= 3 ? 1.1 : 0.4;
+    if (card.name === 'Haunted Fengraf') score += state.graveyard.some(isCreatureCard) ? -0.4 : -1.6;
+    if (wantsBlueSoon) score += (card.blueSources || 0) > 0 ? 2.5 : -3.5;
+
+    return score;
+  };
+
+  return [...lands].sort((left, right) => scoreLand(right) - scoreLand(left))[0];
+};
+
+const getDesiredAttackCount = (state, actor, policy) => {
+  const opponent = actor === 'player' ? 'ai' : 'player';
+  const readyAttackers = state[actor].board.filter(card => card.name === DANDAN_NAME && !card.summoningSickness && !card.tapped && !card.attacking && canDandanAttackDefender(card, state[opponent].board));
+  if (readyAttackers.length === 0) return 0;
+
+  const ourDandans = countDandans(state[actor].board);
+  const opponentDandans = countDandans(state[opponent].board);
+  const opponentBlocks = countDandans(state[opponent].board, card => !card.tapped);
+  const options = [];
+
+  for (let attackers = 0; attackers <= readyAttackers.length; attackers++) {
+    const blocked = Math.min(attackers, opponentBlocks);
+    const damage = Math.max(0, attackers - blocked) * 4;
+    const opponentLifeAfter = state[opponent].life - damage;
+    const opponentSurvivors = Math.max(0, opponentDandans - blocked);
+    const ourAvailableBlocksNextTurn = Math.max(0, ourDandans - attackers);
+    const crackbackDamage = Math.max(0, opponentSurvivors - ourAvailableBlocksNextTurn) * 4;
+
+    options.push({
+      attackers,
+      damage,
+      opponentLifeAfter,
+      crackbackDamage,
+      winningNow: opponentLifeAfter <= 0,
+      score: damage * (1.55 + policy.attackBias * 0.18)
+        - crackbackDamage * (1.2 + policy.blockBias * 0.18)
+        - blocked * (0.45 + policy.control * 0.15)
+        - Math.max(0, attackers - 1) * 0.05
+    });
+  }
+
+  const lethal = options.filter(option => option.winningNow).sort((left, right) => left.attackers - right.attackers)[0];
+  if (lethal) return lethal.attackers;
+
+  const bestSafeRace = options
+    .filter(option => option.attackers > 0 && option.crackbackDamage < state[actor].life)
+    .sort((left, right) => right.score - left.score || right.damage - left.damage || left.attackers - right.attackers)[0];
+
+  if (bestSafeRace && bestSafeRace.score > 0.25) return bestSafeRace.attackers;
+  return 0;
+};
+
+const getDesiredBlockCount = (state, actor, policy) => {
+  const opponent = actor === 'player' ? 'ai' : 'player';
+  const attackers = countDandans(state[opponent].board, card => card.attacking);
+  if (attackers === 0) return 0;
+
+  const currentBlocks = countDandans(state[actor].board, card => !card.tapped && card.blocking);
+  const totalAvailableBlocks = countDandans(state[actor].board, card => !card.tapped);
+  const ourDandans = countDandans(state[actor].board);
+  const opponentDandans = countDandans(state[opponent].board);
+  const maxBlocks = Math.min(attackers, totalAvailableBlocks);
+
+  const options = [];
+  for (let blocks = 0; blocks <= maxBlocks; blocks++) {
+    const actualBlocks = Math.min(blocks, attackers);
+    const lifeAfter = state[actor].life - Math.max(0, attackers - actualBlocks) * 4;
+    const ourDandansAfter = Math.max(0, ourDandans - actualBlocks);
+    const opponentDandansAfter = Math.max(0, opponentDandans - actualBlocks);
+    const crackbackThreat = getCombatThreat(state[opponent].board, ourDandansAfter);
+    const opponentReturnThreat = getCombatThreat(state[actor].board, opponentDandansAfter);
+
+    options.push({
+      blocks: actualBlocks,
+      lifeAfter,
+      crackbackLethal: lifeAfter > 0 && crackbackThreat >= state[opponent].life,
+      opponentReturnThreat,
+      desperationScore: (lifeAfter - opponentReturnThreat) * (1.2 + policy.blockBias * 0.2)
+        + crackbackThreat * 0.2
+        - actualBlocks * Math.max(0.4, 1.5 - policy.blockBias * 0.4)
+    });
+  }
+
+  const winningOption = options.find(option => option.crackbackLethal);
+  if (winningOption) return Math.max(currentBlocks, winningOption.blocks);
+
+  const safeOption = options.find(option => option.lifeAfter > 0 && option.lifeAfter > option.opponentReturnThreat);
+  if (safeOption) return Math.max(currentBlocks, safeOption.blocks);
+
+  const desperationOption = [...options]
+    .filter(option => option.lifeAfter > 0)
+    .sort((left, right) => right.desperationScore - left.desperationScore || left.blocks - right.blocks)[0];
+  if (desperationOption) return Math.max(currentBlocks, desperationOption.blocks);
+
+  return Math.max(currentBlocks, maxBlocks);
+};
+
+const pickTransformTarget = (state, actor) => {
+  const opponent = actor === 'player' ? 'ai' : 'player';
+  const board = state[opponent].board;
+  const candidates = board.filter(card => card.name === DANDAN_NAME || card.isLand).map(card => {
+    const nextBoard = getBoardAfterTransformingPermanent(board, card.id);
+    const killedDandans = countDandansLosingSupport(board, nextBoard);
+    const attackingKills = board.filter(permanent => permanent.name === DANDAN_NAME && permanent.attacking && isDandanSupported(permanent, board) && !isDandanSupported(permanent, nextBoard)).length;
+    const blueLoss = Math.max(0, getBlueSourcesInPlay(board) - getBlueSourcesInPlay(nextBoard));
+    const score = killedDandans * 12 + attackingKills * 4 + blueLoss * 3 + (card.name === DANDAN_NAME ? 1.5 : 0);
+    return { target: card, score };
+  });
+
+  return candidates.filter(candidate => candidate.score > 0).sort((left, right) => right.score - left.score)[0] || null;
+};
+
+const pickBounceTarget = (state, actor) => {
+  const opponent = actor === 'player' ? 'ai' : 'player';
+  const board = state[opponent].board;
+  const candidates = board.filter(card => card.name === DANDAN_NAME || card.isLand).map(card => {
+    const nextBoard = getBoardAfterRemovingPermanent(board, card.id);
+    const killedDandans = countDandansLosingSupport(board, nextBoard);
+    const attackingKills = board.filter(permanent => permanent.name === DANDAN_NAME && permanent.attacking && isDandanSupported(permanent, board) && !isDandanSupported(permanent, nextBoard)).length;
+    const blueLoss = Math.max(0, getBlueSourcesInPlay(board) - getBlueSourcesInPlay(nextBoard));
+    let score = killedDandans * 11 + attackingKills * 4 + blueLoss * 2.5;
+    if (card.name === DANDAN_NAME && isDandanSupported(card, board)) score += card.attacking ? 12 : 9;
+    if (card.isLand) score += getLandType(card) === 'Island' ? 1.5 : 0.5;
+    return { target: card, score };
+  });
+
+  return candidates.filter(candidate => candidate.score > 0).sort((left, right) => right.score - left.score)[0] || null;
+};
+
+const pickControlMagicTarget = (state, actor) => {
+  const opponent = actor === 'player' ? 'ai' : 'player';
+  const targets = state[opponent].board.filter(card => card.name === DANDAN_NAME && isDandanSupported(card, state[opponent].board) && boardHasLandType(state[actor].board, getDandanLandType(card)));
+  if (targets.length === 0) return null;
+  return { target: targets[0], score: 13 + (state[actor].life <= 8 ? 1.5 : 0) };
+};
+
+const chooseEmergencyDefenseSpell = (state, actor, policy) => {
+  const opponent = actor === 'player' ? 'ai' : 'player';
+  const attackers = state[opponent].board.filter(card => card.attacking);
+  if (attackers.length === 0) return null;
+
+  const spellOptions = [];
+  const unsub = state[actor].hand.find(card => card.name === 'Unsubstantiate');
+  if (unsub && isCastable(unsub, state, actor)) {
+    spellOptions.push({
+      score: 10.5,
+      action: { type: 'CAST_SPELL', player: actor, cardId: unsub.id, target: attackers[0] }
+    });
+  }
+
+  const metamorphose = state[actor].hand.find(card => card.name === 'Metamorphose');
+  if (metamorphose && isCastable(metamorphose, state, actor)) {
+    const target = pickBounceTarget(state, actor);
+    if (target) {
+      spellOptions.push({
+        score: target.score + 2,
+        action: { type: 'CAST_SPELL', player: actor, cardId: metamorphose.id, target: target.target }
+      });
+    }
+  }
+
+  ['Magical Hack', 'Crystal Spray'].forEach(name => {
+    const spell = state[actor].hand.find(card => card.name === name);
+    if (!spell || !isCastable(spell, state, actor)) return;
+    const target = pickTransformTarget(state, actor);
+    if (!target) return;
+    spellOptions.push({
+      score: target.score + (name === 'Crystal Spray' ? 1.5 : 0),
+      action: { type: 'CAST_SPELL', player: actor, cardId: spell.id, target: target.target }
+    });
+  });
+
+  const bestOption = spellOptions.sort((left, right) => right.score - left.score)[0];
+  if (!bestOption || bestOption.score < 8 || policy.control < 0.45) return null;
+  return bestOption.action;
+};
+
+const shouldHoldValueInstant = (state, actor, card) => {
+  if (!card?.isInstant || !AI_VALUE_INSTANTS.has(card.name)) return false;
+  if (state.stack.length > 0) return false;
+  if (state.turn !== actor) return !(state.phase === 'main2' || state.phase === 'cleanup');
+  return state[actor].hand.length <= 7;
+};
+
+export const getAiPendingActions = (state, policy, actor = 'player') => {
+  if (!state.pendingAction) return [];
+
+  if (['BRAINSTORM', 'DISCARD', 'DISCARD_CLEANUP', 'MULLIGAN_BOTTOM'].includes(state.pendingAction.type)) {
+    const count = state.pendingAction.count || 0;
+    const selected = pickAiPendingCards(state[actor].hand, count, policy);
+    return [
+      ...selected.map(cardId => ({ type: 'TOGGLE_PENDING_SELECT', cardId })),
+      { type: 'SUBMIT_PENDING_ACTION' }
+    ];
+  }
+
+  if (state.pendingAction.type === 'PREDICT') {
+    return [{ type: 'SUBMIT_PENDING_ACTION', guess: DANDAN_NAME }];
+  }
+
+  if (state.pendingAction.type === 'TELLING_TIME') {
+    const ordered = [...state.pendingAction.cards].sort((a, b) => Number(b.isLand) - Number(a.isLand) || a.cost - b.cost);
+    const [handCard, topCard] = ordered;
+    const actions = [];
+    if (handCard) actions.push({ type: 'UPDATE_TELLING_TIME', cardId: handCard.id, dest: 'hand' });
+    if (topCard) actions.push({ type: 'UPDATE_TELLING_TIME', cardId: topCard.id, dest: 'top' });
+    actions.push({ type: 'SUBMIT_PENDING_ACTION' });
+    return actions;
+  }
+
+  if (state.pendingAction.type === 'HALIMAR_DEPTHS') {
+    return [{ type: 'SUBMIT_PENDING_ACTION' }];
+  }
+
+  if (state.pendingAction.type === 'MYSTIC_SANCTUARY') {
+    return [{ type: 'SUBMIT_PENDING_ACTION', selectedCardId: state.pendingAction.validTargets?.[0] || null }];
+  }
+
+  if (state.pendingAction.type === 'ACTIVATE_LAND') {
+    return [{ type: 'SUBMIT_PENDING_ACTION' }];
+  }
+
+  return [];
+};
+
+export const chooseAiAction = (state, actor, difficulty = 'medium', policy = getLivePolicyWeights(difficulty)) => {
+  const opponent = actor === 'player' ? 'ai' : 'player';
+  const canCast = (card) => Boolean(card) && isCastable(card, state, actor);
+
+  if (state.turn !== actor && state.stack.length === 0 && (state.phase === 'main2' || state.phase === 'cleanup')) {
+    const endStepInstants = state[actor].hand.filter(card => canCast(card) && card.isInstant && AI_VALUE_INSTANTS.has(card.name));
+    if (endStepInstants.length > 0 && !shouldMakeMistake(0.04, policy)) {
+      const spell = [...endStepInstants].sort((left, right) => getSpellPriority(right, policy) - getSpellPriority(left, policy))[0];
+      return { type: 'CAST_SPELL', player: actor, cardId: spell.id };
+    }
+  }
+
+  if (state.stack.length > 0) {
+    const topSpell = state.stack[state.stack.length - 1];
+    if (topSpell.controller === opponent) {
+      if (spellWouldSelfDestruct(state, topSpell)) {
+        return { type: 'PASS_PRIORITY', player: actor };
+      }
+
+      const lapse = state[actor].hand.find(c => c.name === 'Memory Lapse');
+      const lapseValue = getSpellPriority(topSpell.card, policy) + (state.turn === opponent ? 2.5 : 0);
+      const shouldMemoryLapse =
+        canCast(lapse) &&
+        (
+          topSpell.card.name === DANDAN_NAME ||
+          topSpell.card.name === 'Control Magic' ||
+          topSpell.card.name === 'Capture of Jingzhou' ||
+          topSpell.card.name === "Day's Undoing" ||
+          state.turn === opponent ||
+          lapseValue >= 4
+        );
+
+      if (shouldMemoryLapse) {
+        if (policy.counterBias < 0.45 || shouldMakeMistake(0.04, policy)) {
+          return { type: 'PASS_PRIORITY', player: actor };
+        }
+        return { type: 'CAST_SPELL', player: actor, cardId: lapse.id, target: topSpell };
+      }
+
+      const unsub = state[actor].hand.find(c => c.name === 'Unsubstantiate');
+      const shouldUnsub =
+        canCast(unsub) &&
+        (
+          topSpell.card.name === DANDAN_NAME ||
+          topSpell.card.name === 'Control Magic' ||
+          topSpell.card.name === 'Capture of Jingzhou' ||
+          topSpell.card.name === "Day's Undoing" ||
+          getSpellPriority(topSpell.card, policy) >= 4.5
+        );
+
+      if (shouldUnsub) {
+        if (policy.counterBias < 0.5 || shouldMakeMistake(0.08, policy)) {
+          return { type: 'PASS_PRIORITY', player: actor };
+        }
+        return { type: 'CAST_SPELL', player: actor, cardId: unsub.id, target: topSpell };
+      }
+    }
+    return { type: 'PASS_PRIORITY', player: actor };
+  }
+
+  if (state.turn === actor && state.phase === 'declare_attackers') {
+    const readyDandans = state[actor].board.filter(c => c.name === DANDAN_NAME && !c.summoningSickness && !c.tapped && !c.attacking && canDandanAttackDefender(c, state[opponent].board));
+    const desiredAttackers = getDesiredAttackCount(state, actor, policy);
+    const currentAttackers = state[actor].board.filter(c => c.name === DANDAN_NAME && c.attacking).length;
+    if (readyDandans.length > 0 && currentAttackers < desiredAttackers && !shouldMakeMistake(0.1, policy)) {
+      return { type: 'TOGGLE_ATTACK', cardId: readyDandans[0].id, player: actor };
+    }
+    return { type: 'PASS_PRIORITY', player: actor };
+  }
+
+  if (state.turn === opponent && state.phase === 'declare_blockers') {
+    const attackers = state[opponent].board.filter(c => c.attacking);
+    if (attackers.length > 0) {
+      const emergencySpell = chooseEmergencyDefenseSpell(state, actor, policy);
+      if (!state[actor].board.some(c => c.name === DANDAN_NAME && !c.tapped) && emergencySpell) {
+        return emergencySpell;
+      }
+
+      const currentBlocks = state[actor].board.filter(c => c.name === DANDAN_NAME && !c.tapped && c.blocking).length;
+      const desiredBlocks = getDesiredBlockCount(state, actor, policy);
+      const blockers = state[actor].board.filter(c => c.name === DANDAN_NAME && !c.tapped && !c.blocking);
+      if (blockers.length > 0 && currentBlocks < desiredBlocks && !shouldMakeMistake(0.1, policy)) {
+        return { type: 'TOGGLE_BLOCK', cardId: blockers[0].id, player: actor };
+      }
+    }
+    return { type: 'PASS_PRIORITY', player: actor };
+  }
+
+  if (state.turn === actor && (state.phase === 'main1' || state.phase === 'main2' || state.phase === 'upkeep')) {
+    const landsInPlay = state[actor].board.filter(c => c.isLand).length;
+    const land = chooseLandToPlay(state, actor);
+    if (state.phase !== 'upkeep' && land && state[actor].landsPlayed === 0 && landsInPlay < policy.landLimit) {
+      return { type: 'PLAY_LAND', player: actor, cardId: land.id };
+    }
+
+    const dandan = state[actor].hand.find(c => c.name === DANDAN_NAME);
+    const actorHasIsland = controlsIsland(state[actor].board);
+    const opponentHasIsland = controlsIsland(state[opponent].board);
+    const targetedOptions = [];
+
+    const controlMagic = state[actor].hand.find(c => c.name === 'Control Magic');
+    const controlMagicTarget = pickControlMagicTarget(state, actor);
+    if (state.phase !== 'upkeep' && canCast(controlMagic) && controlMagicTarget && policy.stealBias >= 0.72) {
+      targetedOptions.push({
+        score: controlMagicTarget.score,
+        action: { type: 'CAST_SPELL', player: actor, cardId: controlMagic.id, target: controlMagicTarget.target }
+      });
+    }
+
+    const metamorphose = state[actor].hand.find(c => c.name === 'Metamorphose');
+    const bounceTarget = pickBounceTarget(state, actor);
+    if (state.phase !== 'upkeep' && canCast(metamorphose) && bounceTarget && policy.control >= 0.42) {
+      targetedOptions.push({
+        score: bounceTarget.score + 1.5,
+        action: { type: 'CAST_SPELL', player: actor, cardId: metamorphose.id, target: bounceTarget.target }
+      });
+    }
+
+    ['Magical Hack', 'Crystal Spray'].forEach(name => {
+      const spell = state[actor].hand.find(c => c.name === name);
+      const target = pickTransformTarget(state, actor);
+      if (state.phase === 'upkeep' || !canCast(spell) || !target || policy.control < 0.42) return;
+      targetedOptions.push({
+        score: target.score + (name === 'Crystal Spray' ? 1.5 : 0),
+        action: { type: 'CAST_SPELL', player: actor, cardId: spell.id, target: target.target }
+      });
+    });
+
+    const bestTargetedSpell = targetedOptions.sort((left, right) => right.score - left.score)[0] || null;
+    if (bestTargetedSpell && bestTargetedSpell.score >= 10 && !shouldMakeMistake(0.05, policy)) {
+      return bestTargetedSpell.action;
+    }
+
+    if (state.phase !== 'upkeep' && canCast(dandan) && actorHasIsland && opponentHasIsland && !shouldMakeMistake(0.06, policy)) {
+      return { type: 'CAST_SPELL', player: actor, cardId: dandan.id };
+    }
+
+    if (bestTargetedSpell && bestTargetedSpell.score >= 6 && !shouldMakeMistake(0.05, policy)) {
+      return bestTargetedSpell.action;
+    }
+
+    const castableSpells = state[actor].hand.filter(c => !c.isLand && ![DANDAN_NAME, 'Memory Lapse', 'Unsubstantiate', 'Magical Hack', 'Crystal Spray', 'Control Magic', 'Metamorphose'].includes(c.name) && isCastable(c, state, actor) && !shouldHoldValueInstant(state, actor, c));
+    if (castableSpells.length > 0) {
+      const spell = difficulty === 'hard'
+        ? [...castableSpells].sort((a, b) => getSpellPriority(b, policy) - getSpellPriority(a, policy))[0]
+        : difficulty === 'easy'
+          ? randomChoice(castableSpells)
+          : castableSpells[0];
+      if (!shouldMakeMistake(0.08, policy)) {
+        return { type: 'CAST_SPELL', player: actor, cardId: spell.id };
+      }
+    }
+
+    const cycler = state[actor].hand.find(c => isCyclable(c, state, actor));
+    const spareLandsInHand = state[actor].hand.filter(c => c.isLand).length;
+    if (cycler && (landsInPlay >= policy.landLimit || spareLandsInHand > 2)) {
+      return { type: 'CYCLE_CARD', player: actor, cardId: cycler.id };
+    }
+  }
+
+  return { type: 'PASS_PRIORITY', player: actor };
 };
 
 const defaultEffects = {
@@ -471,6 +930,16 @@ export const createGameReducer = (effects = defaultEffects) => {
   switch (action.type) {
     case 'RETURN_TO_MENU':
       return { ...initialState };
+
+    case 'SURRENDER':
+      return {
+        ...s,
+        winner: action.player === 'player' ? 'ai' : 'player',
+        pendingAction: null,
+        pendingTargetSelection: null,
+        stackResolving: false,
+        log: [`${action.player} surrendered.`, ...(s.log || [])].slice(0, 15)
+      };
 
     case 'START_GAME':
       effects.initAudio();
@@ -652,7 +1121,7 @@ export const createGameReducer = (effects = defaultEffects) => {
         else target = s[opp].board.find(c => c.name === 'DandÃ¢n') || s[p].board.find(c => c.name === 'DandÃ¢n');
       }
       else if (!target && card.name === 'Control Magic') {
-        target = s[opp].board.find(c => c.name === 'DandÃ¢n'); 
+        target = s[opp].board.find(isCreatureCard) || s[p].board.find(isCreatureCard); 
       }
       else if (!target && ['Magical Hack', 'Crystal Spray', 'Metamorphose'].includes(card.name)) {
         target = s[opp].board.find(c => c.name === 'DandÃ¢n') || s[opp].board.find(c => c.isLand) || s[p].board.find(c => c.isLand);
@@ -735,8 +1204,7 @@ export const createGameReducer = (effects = defaultEffects) => {
                 const targetIdx = s[p2].board.findIndex(c => c.id === spell.target.id);
                 if (targetIdx > -1) {
                     const [bounced] = s[p2].board.splice(targetIdx, 1);
-                    bounced.tapped = false; bounced.attacking = false; bounced.summoningSickness = true;
-                    s.deck.push(bounced);
+                    s.deck.push(preparePermanentForZoneChange(bounced));
                     logAction(`Metamorphose put ${bounced.name} on top of the library!`);
                     found = true;
                 }
@@ -757,10 +1225,9 @@ export const createGameReducer = (effects = defaultEffects) => {
               const bIdx = s[p2].board.findIndex(c => c.id === spell.target.id);
               if (bIdx > -1) {
                 const [bounced] = s[p2].board.splice(bIdx, 1);
-                bounced.tapped = false; bounced.attacking = false; bounced.summoningSickness = true;
                 const owner = bounced.owner || p2;
-                s[owner].hand.push(bounced);
-                logAction(`Unsubstantiate returned DandÃ¢n to owner's hand.`);
+                s[owner].hand.push(preparePermanentForZoneChange(bounced));
+                logAction(`Unsubstantiate returned ${bounced.name} to owner's hand.`);
               }
             });
           }
@@ -887,20 +1354,42 @@ export const createGameReducer = (effects = defaultEffects) => {
       }
       else if (spell.card.name === 'Control Magic') {
         if (spell.target) {
-            const opp = spell.controller === 'player' ? 'ai' : 'player';
-            const targetIdx = s[opp].board.findIndex(c => c.id === spell.target.id);
-            if (targetIdx > -1) {
-                const [stolen] = s[opp].board.splice(targetIdx, 1);
-                const aura = { ...spell.card, owner: spell.controller, enchantedId: stolen.id };
-                stolen.controlledByAuraId = aura.id;
-                s[spell.controller].board.push(stolen);
+            let targetController = null;
+            let targetIdx = -1;
+            ['player', 'ai'].forEach(p2 => {
+              if (targetIdx > -1) return;
+              const foundIdx = s[p2].board.findIndex(c => c.id === spell.target.id && isCreatureCard(c));
+              if (foundIdx > -1) {
+                targetController = p2;
+                targetIdx = foundIdx;
+              }
+            });
+
+            if (targetController && targetIdx > -1) {
+                const [stolen] = s[targetController].board.splice(targetIdx, 1);
+                const aura = {
+                  ...clearAttachmentState(spell.card),
+                  owner: spell.card.owner || spell.controller,
+                  summoningSickness: false,
+                  enchantedId: stolen.id,
+                  attachmentOrder: s.actionCount || 0
+                };
+                const controllerChanged = targetController !== spell.controller;
+                const enchantedCreature = {
+                  ...stolen,
+                  controlledByAuraId: aura.id,
+                  summoningSickness: controllerChanged ? true : stolen.summoningSickness,
+                  attacking: controllerChanged ? false : stolen.attacking,
+                  blocking: controllerChanged ? false : stolen.blocking
+                };
+                s[spell.controller].board.push(enchantedCreature);
                 s[spell.controller].board.push(aura);
                 logAction(`${spell.controller} resolved Control Magic.`);
             } else {
-                s.graveyard.push(spell.card);
+                s.graveyard.push(clearAttachmentState(spell.card));
             }
         } else {
-            s.graveyard.push(spell.card);
+            s.graveyard.push(clearAttachmentState(spell.card));
         }
       }
       
@@ -1148,7 +1637,11 @@ export const createGameReducer = (effects = defaultEffects) => {
     case 'TOGGLE_ATTACK':
       if (s.turn !== action.player || s.phase !== 'declare_attackers') return s;
       s[action.player].board = s[action.player].board.map(c => {
-         if (c.id === action.cardId) { const isAttacking = !c.attacking; return { ...c, attacking: isAttacking, tapped: isAttacking }; }
+         if (c.id === action.cardId) {
+            if (c.name === DANDAN_NAME && !canDandanAttackDefender(c, s[action.player === 'player' ? 'ai' : 'player'].board)) return c;
+            const isAttacking = !c.attacking;
+            return { ...c, attacking: isAttacking };
+         }
          return c;
       });
       return s;

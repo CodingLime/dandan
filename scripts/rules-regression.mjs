@@ -64,12 +64,13 @@ const getBlueSources = (card) => {
 };
 
 const getBlueRequirement = (manaCost) => (manaCost.match(/\{U\}/g) || []).length;
+const isCreatureCard = (card) => Boolean(card) && (card.type?.includes('Creature') || card.name === DANDAN_NAME);
 
 const makeCard = (template, overrides = {}) => ({
   ...template,
   id: overrides.id || `${template.name}-${Math.random().toString(36).slice(2, 10)}`,
   tapped: false,
-  summoningSickness: template.isLand ? false : true,
+  summoningSickness: isCreatureCard(template),
   attacking: false,
   blocking: false,
   isSwamp: false,
@@ -80,6 +81,7 @@ const makeCard = (template, overrides = {}) => ({
   dandanLandType: 'Island',
   enchantedId: null,
   controlledByAuraId: null,
+  attachmentOrder: null,
   ...overrides
 });
 
@@ -270,6 +272,194 @@ test('Control Magic leaves with the enchanted Dandan when state-based actions ki
   expect(!next.player.board.some((card) => card.id === aura.id), 'Control Magic stayed on the battlefield after its Dandan died');
   expect(next.graveyard.some((card) => card.id === stolenDandan.id), 'Dead Dandan did not reach the graveyard');
   expect(next.graveyard.some((card) => card.id === aura.id), 'Control Magic did not reach the graveyard');
+});
+
+test('declared attackers can be toggled off before combat is confirmed', () => {
+  const dandan = makeCard(CARDS.DANDAN, {
+    id: 'attack-toggle-dandan',
+    owner: 'player',
+    summoningSickness: false
+  });
+  const opponentIsland = makeCard(CARDS.ISLAND_1, { id: 'attack-toggle-island' });
+
+  let state = makeState({
+    turn: 'player',
+    phase: 'declare_attackers',
+    priority: 'player',
+    player: {
+      life: 20,
+      hand: [],
+      board: [dandan],
+      landsPlayed: 0
+    },
+    ai: {
+      life: 20,
+      hand: [],
+      board: [opponentIsland],
+      landsPlayed: 0
+    }
+  });
+
+  state = reducer(state, { type: 'TOGGLE_ATTACK', player: 'player', cardId: dandan.id });
+  const selected = state.player.board.find((card) => card.id === dandan.id);
+  expect(selected.attacking === true, 'Dandan did not become an attacker');
+  expect(selected.tapped === false, 'Dandan should not tap until combat is locked in');
+
+  state = reducer(state, { type: 'TOGGLE_ATTACK', player: 'player', cardId: dandan.id });
+  const deselected = state.player.board.find((card) => card.id === dandan.id);
+  expect(deselected.attacking === false, 'Dandan could not be deselected as an attacker');
+  expect(deselected.tapped === false, 'Deselected Dandan should remain untapped');
+});
+
+test('Control Magic steals a Dandan without gaining creature summoning sickness itself', () => {
+  const islands = [
+    makeCard(CARDS.ISLAND_1, { id: 'cm-island-1' }),
+    makeCard(CARDS.ISLAND_1, { id: 'cm-island-2' }),
+    makeCard(CARDS.ISLAND_2, { id: 'cm-island-3' }),
+    makeCard(CARDS.ISLAND_2, { id: 'cm-island-4' })
+  ];
+  const controlMagic = makeCard(CARDS.CONTROL_MAGIC, { id: 'cm-spell', owner: 'player' });
+  const enemyDandan = makeCard(CARDS.DANDAN, {
+    id: 'cm-target',
+    owner: 'ai',
+    summoningSickness: false
+  });
+
+  let state = makeState({
+    player: {
+      life: 20,
+      hand: [controlMagic],
+      board: islands,
+      landsPlayed: 0
+    },
+    ai: {
+      life: 20,
+      hand: [],
+      board: [enemyDandan],
+      landsPlayed: 0
+    }
+  });
+
+  state = reducer(state, { type: 'CAST_SPELL', player: 'player', cardId: controlMagic.id, target: enemyDandan });
+  state = reducer(state, { type: 'PASS_PRIORITY', player: 'ai' });
+  state = reducer(state, { type: 'PASS_PRIORITY', player: 'player' });
+  expect(state.stackResolving === true, 'Control Magic did not move to stack resolution');
+  state = reducer(state, { type: 'RESOLVE_TOP_STACK' });
+
+  const auraOnBoard = state.player.board.find((card) => card.name === 'Control Magic');
+  const stolenOnBoard = state.player.board.find((card) => card.id === enemyDandan.id);
+  expect(Boolean(auraOnBoard), 'Control Magic did not stay on the battlefield');
+  expect(Boolean(stolenOnBoard), 'Stolen Dandan did not move under the new controller');
+  expect(auraOnBoard.summoningSickness === false, 'Control Magic incorrectly gained summoning sickness');
+  expect(stolenOnBoard.summoningSickness === true, 'Stolen Dandan should gain summoning sickness under the new controller');
+  expect(stolenOnBoard.controlledByAuraId === auraOnBoard.id, 'Stolen Dandan is not linked to the Control Magic aura');
+});
+
+test('Metamorphose on Control Magic returns the Dandan to its owner', () => {
+  const playerIslands = [
+    makeCard(CARDS.ISLAND_1, { id: 'meta-island-1' }),
+    makeCard(CARDS.ISLAND_1, { id: 'meta-island-2' })
+  ];
+  const aura = makeCard(CARDS.CONTROL_MAGIC, {
+    id: 'meta-aura',
+    owner: 'player',
+    enchantedId: 'meta-dandan',
+    attachmentOrder: 1
+  });
+  const stolenDandan = makeCard(CARDS.DANDAN, {
+    id: 'meta-dandan',
+    owner: 'ai',
+    summoningSickness: false,
+    controlledByAuraId: aura.id
+  });
+  const metamorphose = makeCard(CARDS.METAMORPHOSE, { id: 'meta-spell', owner: 'ai' });
+  const aiIslands = [
+    makeCard(CARDS.ISLAND_2, { id: 'meta-ai-island-1' }),
+    makeCard(CARDS.ISLAND_2, { id: 'meta-ai-island-2' })
+  ];
+
+  let state = makeState({
+    turn: 'ai',
+    priority: 'ai',
+    player: {
+      life: 20,
+      hand: [],
+      board: [stolenDandan, aura, ...playerIslands],
+      landsPlayed: 0
+    },
+    ai: {
+      life: 20,
+      hand: [metamorphose],
+      board: aiIslands,
+      landsPlayed: 0
+    }
+  });
+
+  state = reducer(state, { type: 'CAST_SPELL', player: 'ai', cardId: metamorphose.id, target: aura });
+  state = reducer(state, { type: 'PASS_PRIORITY', player: 'player' });
+  state = reducer(state, { type: 'PASS_PRIORITY', player: 'ai' });
+  expect(state.stackResolving === true, 'Metamorphose did not move to stack resolution');
+  state = reducer(state, { type: 'RESOLVE_TOP_STACK' });
+
+  expect(!state.player.board.some((card) => card.id === aura.id), 'Control Magic stayed on the battlefield after Metamorphose');
+  expect(state.deck[state.deck.length - 1]?.id === aura.id, 'Control Magic did not go on top of the library');
+  expect(state.deck[state.deck.length - 1]?.enchantedId === null, 'Control Magic kept a stale attachment after leaving the battlefield');
+  expect(state.ai.board.some((card) => card.id === stolenDandan.id), 'Dandan did not return to its owner after Control Magic left');
+  const returnedDandan = state.ai.board.find((card) => card.id === stolenDandan.id);
+  expect(returnedDandan.controlledByAuraId === null, 'Returned Dandan kept a stale aura link');
+  expect(returnedDandan.summoningSickness === true, 'Returned Dandan should have summoning sickness after control changes back');
+});
+
+test('older Control Magic resumes control when the newer aura leaves', () => {
+  const firstAura = makeCard(CARDS.CONTROL_MAGIC, {
+    id: 'older-aura',
+    owner: 'player',
+    enchantedId: 'stacked-dandan',
+    attachmentOrder: 1
+  });
+  const secondAura = makeCard(CARDS.CONTROL_MAGIC, {
+    id: 'newer-aura',
+    owner: 'ai',
+    enchantedId: 'stacked-dandan',
+    attachmentOrder: 2
+  });
+  const stackedDandan = makeCard(CARDS.DANDAN, {
+    id: 'stacked-dandan',
+    owner: 'ai',
+    summoningSickness: false,
+    controlledByAuraId: secondAura.id
+  });
+  const metamorphose = makeCard(CARDS.METAMORPHOSE, { id: 'stacked-meta', owner: 'player' });
+  const playerIslands = [
+    makeCard(CARDS.ISLAND_1, { id: 'stacked-island-1' }),
+    makeCard(CARDS.ISLAND_1, { id: 'stacked-island-2' })
+  ];
+
+  let state = makeState({
+    player: {
+      life: 20,
+      hand: [metamorphose],
+      board: [firstAura, ...playerIslands],
+      landsPlayed: 0
+    },
+    ai: {
+      life: 20,
+      hand: [],
+      board: [stackedDandan, secondAura],
+      landsPlayed: 0
+    }
+  });
+
+  state = reducer(state, { type: 'CAST_SPELL', player: 'player', cardId: metamorphose.id, target: secondAura });
+  state = reducer(state, { type: 'PASS_PRIORITY', player: 'ai' });
+  state = reducer(state, { type: 'PASS_PRIORITY', player: 'player' });
+  expect(state.stackResolving === true, 'Metamorphose did not reach resolution for stacked Control Magics');
+  state = reducer(state, { type: 'RESOLVE_TOP_STACK' });
+
+  expect(state.player.board.some((card) => card.id === stackedDandan.id), 'Older Control Magic did not resume control of the Dandan');
+  const resumedDandan = state.player.board.find((card) => card.id === stackedDandan.id);
+  expect(resumedDandan.controlledByAuraId === firstAura.id, 'Resumed Dandan is not linked to the older Control Magic');
+  expect(state.ai.board.every((card) => card.id !== stackedDandan.id), 'Dandan stayed with the newer controller after that aura left');
 });
 
 test('Capture of Jingzhou adds an extra turn without skipping the current main phase', () => {

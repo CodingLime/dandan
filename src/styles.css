@@ -136,6 +136,20 @@ textarea,
   left: calc(var(--land-index, 0) * var(--land-step));
 }
 
+.arena-pass-button,
+.arena-pass-button:focus,
+.arena-pass-button:focus-visible,
+.arena-pass-button:active {
+  outline: none !important;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.arena-pass-button::-moz-focus-inner {
+  border: 0;
+}
+
 @media (min-width: 640px) {
   .land-stack-group {
     --land-card-width: 80px;

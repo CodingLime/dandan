@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useReducer } from 'react';
-import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeftRight, Target, Droplet, Shield, CloudRain } from 'lucide-react';
-import { AI_DIFFICULTIES, AI_DIFFICULTY_LABELS, AI_SPEED, CARDS, DANDAN_NAME, PREDICT_OPTIONS, SHARED_DECK_SIZE, checkHasActions, controlsIsland, createGameReducer, getAvailableMana, getLivePolicyWeights, getManaPool, initialState, isActivatable, isCastable, isCyclable, isValidTarget } from './src/game/engine';
+import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeftRight, Target, Droplet, Shield, CloudRain, LogOut } from 'lucide-react';
+import { AI_DIFFICULTIES, AI_DIFFICULTY_LABELS, AI_SPEED, CARDS, DANDAN_NAME, PREDICT_OPTIONS, SHARED_DECK_SIZE, canDandanAttackDefender, checkHasActions, chooseAiAction, controlsIsland, createGameReducer, getAiPendingActions, getAvailableMana, getLivePolicyWeights, getManaPool, initialState, isActivatable, isCastable, isCyclable, isValidTarget } from './src/game/engine';
 
 // --- ADVANCED AUDIO ENGINE ---
 const AudioEngine = {
@@ -132,9 +132,9 @@ const PhaseTracker = ({ currentPhase, turn }) => {
 
   return (
     <div className="flex items-center bg-slate-900/95 rounded-full border border-slate-700 shadow-[0_10px_30px_rgba(0,0,0,0.8)] p-1.5 shrink-0 backdrop-blur-md h-14 sm:h-16">
-       <div className={`text-[8px] sm:text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full transition-all duration-500 mr-2 border ${
-          isPlayerTurn ? 'bg-blue-600/20 text-blue-400 border-blue-500/50 shadow-[0_0_15px_rgba(37,99,235,0.3)]' : 'bg-red-900/30 text-red-400 border-red-500/50 shadow-[0_0_15px_rgba(153,27,27,0.3)]'
-       }`}>
+      <div className={`w-[84px] sm:w-[98px] min-w-[84px] sm:min-w-[98px] flex items-center justify-center text-center text-[8px] sm:text-[9px] font-black uppercase tracking-widest px-2 sm:px-3 py-1.5 rounded-full transition-all duration-500 mr-2 border ${
+         isPlayerTurn ? 'bg-blue-600/20 text-blue-400 border-blue-500/50 shadow-[0_0_15px_rgba(37,99,235,0.3)]' : 'bg-red-900/30 text-red-400 border-red-500/50 shadow-[0_0_15px_rgba(153,27,27,0.3)]'
+      }`}>
           {isPlayerTurn ? 'Your Turn' : "Opponent"}
        </div>
        <div className="flex items-center pr-1 gap-0.5 sm:gap-1">
@@ -157,34 +157,6 @@ const PhaseTracker = ({ currentPhase, turn }) => {
        </div>
     </div>
   );
-};
-
-const randomChoice = (list) => list[Math.floor(Math.random() * list.length)];
-const shouldMakeMistake = (difficulty, rate, policy) => Math.random() < Math.max(rate, policy?.mistakeRate ?? (difficulty === 'easy' ? 0.3 : 0.08));
-const pickAiPendingCards = (hand, count, policy) => {
-  const preferKeepingLands = hand.filter(card => card.isLand).length < Math.ceil(policy.landLimit ?? 4);
-  return [...hand]
-    .sort((a, b) => {
-      const aScore = (a.isLand ? (preferKeepingLands ? 8 : -4) : 0) - a.cost * (policy.control > policy.aggression ? 0.6 : 0.2);
-      const bScore = (b.isLand ? (preferKeepingLands ? 8 : -4) : 0) - b.cost * (policy.control > policy.aggression ? 0.6 : 0.2);
-      return aScore - bScore;
-    })
-    .slice(0, count)
-    .map(card => card.id);
-};
-const getSpellPriority = (card, policy) => {
-  switch (card.name) {
-    case 'Control Magic': return 6 + policy.control * 4;
-    case 'Capture of Jingzhou': return 4 + policy.control * 3 + policy.drawBias;
-    case "Day's Undoing": return 3 + policy.drawBias * 4;
-    case 'Accumulated Knowledge': return 3 + policy.drawBias * 3;
-    case 'Chart a Course': return 2 + policy.drawBias * 2;
-    case 'Brainstorm': return 2 + policy.drawBias * 2;
-    case 'Telling Time': return 1 + policy.drawBias * 2;
-    case 'Predict': return 1 + policy.drawBias * 1.8;
-    case 'Mental Note': return 1 + policy.drawBias;
-    default: return card.name === DANDAN_NAME ? 6 + policy.aggression * 4 : 2;
-  }
 };
 
 const getGroupedList = (zoneList) => {
@@ -301,7 +273,7 @@ const Preloader = ({ onComplete }) => {
 };
 
 // --- RESPONSIVE CARD COMPONENT ---
-const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false, official = false, draggable = false, onDragStart, onDragOver, onDrop, castable = false, targetable = false, activatable = false }) => {
+const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false, official = false, draggable = false, onDragStart, onDragOver, onDrop, castable = false, targetable = false, activatable = false, subtleHighlight = false, disableHoverLift = false }) => {
   const holdTimer = useRef(null);
   const [isPressing, setIsPressing] = useState(false);
 
@@ -342,7 +314,7 @@ const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false
       ringClass = 'ring-2 ring-red-500 ring-offset-2 ring-offset-slate-950 shadow-[0_0_15px_rgba(239,68,68,0.8)] animate-pulse cursor-crosshair';
   } else if (castable && zone === 'hand') {
       ringClass = 'ring-2 ring-blue-400 ring-offset-1 ring-offset-slate-950 shadow-[0_0_15px_rgba(96,165,250,0.6)]';
-      interactionClass = 'cursor-pointer hover:-translate-y-4';
+      interactionClass = disableHoverLift ? 'cursor-pointer' : 'cursor-pointer hover:-translate-y-4';
   } else if (activatable && zone === 'board') {
       ringClass = 'ring-2 ring-cyan-400 ring-offset-1 ring-offset-slate-950 shadow-[0_0_15px_rgba(34,211,238,0.6)] animate-pulse cursor-pointer';
       interactionClass = 'cursor-pointer hover:scale-[1.02]';
@@ -350,8 +322,10 @@ const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false
       ringClass = 'ring-2 ring-orange-500 ring-offset-1 shadow-[0_0_15px_rgba(249,115,22,0.8)]';
   } else if (card.blocking) {
       ringClass = 'ring-2 ring-green-500 ring-offset-1 shadow-[0_0_15px_rgba(34,197,94,0.8)]';
+  } else if (subtleHighlight) {
+      ringClass = 'ring-1 ring-amber-300/75 ring-offset-1 ring-offset-slate-950 shadow-[0_0_10px_rgba(251,191,36,0.18)]';
   } else {
-      if (zone === 'hand') interactionClass = 'cursor-pointer hover:-translate-y-4';
+      if (zone === 'hand') interactionClass = disableHoverLift ? 'cursor-pointer' : 'cursor-pointer hover:-translate-y-4';
       if (zone === 'board' && card.name === 'DandÃ¢n' && !card.tapped && !card.summoningSickness) interactionClass = 'cursor-pointer hover:ring-2 hover:ring-slate-400';
   }
   if (zone === 'board' && card.isLand) {
@@ -486,6 +460,42 @@ const StackedLandGroup = ({ lands, official, state, zone, onZoom, onClick, activ
   );
 };
 
+const AttachedPermanentStack = ({ permanent, attachedAuras = [], official, state, onZoom, onClick, subtleHighlight = false }) => {
+  const sortedAuras = [...attachedAuras].sort((a, b) => (a.attachmentOrder || 0) - (b.attachmentOrder || 0));
+
+  return (
+    <div className="relative shrink-0 w-[72px] h-[116px] sm:w-[90px] sm:h-[144px]">
+      {sortedAuras.map((aura, index) => (
+        <div
+          key={aura.id}
+          className="absolute left-1/2 -translate-x-1/2"
+          style={{ top: `${14 + index * 10}px`, zIndex: 4 + index }}
+        >
+          <Card
+            card={aura}
+            zone="board"
+            official={official}
+            onZoom={onZoom}
+            onClick={onClick}
+            targetable={isValidTarget(aura, 'board', state)}
+          />
+        </div>
+      ))}
+      <div className="absolute left-1/2 top-0 -translate-x-1/2 z-20">
+        <Card
+          card={permanent}
+          zone="board"
+          official={official}
+          onZoom={onZoom}
+          onClick={onClick}
+          targetable={isValidTarget(permanent, 'board', state)}
+          subtleHighlight={subtleHighlight}
+        />
+      </div>
+    </div>
+  );
+};
+
 // --- MAIN APP COMPONENT ---
 export default function App() {
   const [preloaded, setPreloaded] = useState(false);
@@ -494,6 +504,7 @@ export default function App() {
   const [useOfficialCards, setUseOfficialCards] = useState(true);
   const [showMenuSettings, setShowMenuSettings] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [muted, setMuted] = useState(false);
   const [draggedIdx, setDraggedIdx] = useState(null);
   const [zoomedCard, setZoomedCard] = useState(null); 
@@ -541,151 +552,15 @@ export default function App() {
   const resolveAiPendingAction = () => {
     if (!state.pendingAction) return;
     const policy = getLivePolicyWeights(state.difficulty || 'medium');
-
-    if (state.pendingAction.type === 'BRAINSTORM' || state.pendingAction.type === 'DISCARD' || state.pendingAction.type === 'DISCARD_CLEANUP' || state.pendingAction.type === 'MULLIGAN_BOTTOM') {
-      const count = state.pendingAction.count || 0;
-      const selected = pickAiPendingCards(state.player.hand, count, policy);
-      selected.forEach(cardId => dispatch({ type: 'TOGGLE_PENDING_SELECT', cardId }));
-      setTimeout(() => dispatch({ type: 'SUBMIT_PENDING_ACTION' }), 0);
-      return;
-    }
-
-    if (state.pendingAction.type === 'PREDICT') {
-      dispatch({ type: 'SUBMIT_PENDING_ACTION', guess: DANDAN_NAME });
-      return;
-    }
-
-    if (state.pendingAction.type === 'TELLING_TIME') {
-      const ordered = [...state.pendingAction.cards].sort((a, b) => Number(b.isLand) - Number(a.isLand) || a.cost - b.cost);
-      const [handCard, topCard] = ordered;
-      if (handCard) dispatch({ type: 'UPDATE_TELLING_TIME', cardId: handCard.id, dest: 'hand' });
-      if (topCard) dispatch({ type: 'UPDATE_TELLING_TIME', cardId: topCard.id, dest: 'top' });
-      setTimeout(() => dispatch({ type: 'SUBMIT_PENDING_ACTION' }), 0);
-      return;
-    }
-
-    if (state.pendingAction.type === 'HALIMAR_DEPTHS') {
-      dispatch({ type: 'SUBMIT_PENDING_ACTION' });
-      return;
-    }
-
-    if (state.pendingAction.type === 'MYSTIC_SANCTUARY') {
-      dispatch({ type: 'SUBMIT_PENDING_ACTION', selectedCardId: state.pendingAction.validTargets?.[0] || null });
-    }
+    const actions = getAiPendingActions(state, policy, 'player');
+    if (actions.length === 0) return;
+    actions.forEach(action => dispatch(action));
   };
 
   const takeAiAction = (actor) => {
-    const opponent = actor === 'player' ? 'ai' : 'player';
     const difficulty = state.difficulty || 'medium';
     const policy = getLivePolicyWeights(difficulty);
-    const canCast = (card) => Boolean(card) && isCastable(card, state, actor);
-    if (state.stack.length > 0) {
-      const topSpell = state.stack[state.stack.length - 1];
-      if (topSpell.controller === opponent) {
-        const lapse = state[actor].hand.find(c => c.name === 'Memory Lapse');
-        const lapseValue = getSpellPriority(topSpell.card, policy) + (state.turn === opponent ? 2.5 : 0);
-        const shouldMemoryLapse =
-          canCast(lapse) &&
-          (
-            topSpell.card.name === DANDAN_NAME ||
-            topSpell.card.name === 'Control Magic' ||
-            topSpell.card.name === 'Capture of Jingzhou' ||
-            topSpell.card.name === "Day's Undoing" ||
-            state.turn === opponent ||
-            lapseValue >= 4
-          );
-
-        if (shouldMemoryLapse) {
-          if (policy.counterBias < 0.45 || shouldMakeMistake(difficulty, 0.04, policy)) {
-            dispatch({ type: 'PASS_PRIORITY', player: actor });
-            return;
-          }
-          dispatch({ type: 'CAST_SPELL', player: actor, cardId: lapse.id, target: topSpell });
-          return;
-        }
-        const unsub = state[actor].hand.find(c => c.name === 'Unsubstantiate');
-        if (canCast(unsub) && topSpell.card.name === DANDAN_NAME) {
-          if (policy.counterBias < 0.5 || shouldMakeMistake(difficulty, 0.08, policy)) {
-            dispatch({ type: 'PASS_PRIORITY', player: actor });
-            return;
-          }
-          dispatch({ type: 'CAST_SPELL', player: actor, cardId: unsub.id, target: topSpell });
-          return;
-        }
-      }
-      dispatch({ type: 'PASS_PRIORITY', player: actor }); return;
-    }
-    
-    if (state.turn === actor && state.phase === 'declare_attackers') {
-      const defenderHasIsland = controlsIsland(state[opponent].board);
-      const readyDandans = state[actor].board.filter(c => c.name === DANDAN_NAME && !c.summoningSickness && !c.tapped && !c.attacking);
-      const shouldAttack = readyDandans.length > 0 && defenderHasIsland && (readyDandans.length * policy.attackBias >= Math.max(0.8, state[opponent].board.filter(c => c.name === DANDAN_NAME).length * policy.blockBias));
-      if (shouldAttack && !shouldMakeMistake(difficulty, 0.1, policy)) {
-          dispatch({ type: 'TOGGLE_ATTACK', cardId: readyDandans[0].id, player: actor }); return;
-      }
-      dispatch({ type: 'PASS_PRIORITY', player: actor }); return;
-    }
-    
-    if (state.turn === opponent && state.phase === 'declare_blockers') {
-      const opponentAttacking = state[opponent].board.some(c => c.attacking);
-      if (opponentAttacking) {
-          const hack = state[actor].hand.find(c => ['Magical Hack', 'Crystal Spray', 'Metamorphose'].includes(c.name));
-          if (!state[actor].board.some(c => c.name === DANDAN_NAME && !c.tapped) && canCast(hack) && policy.control >= 0.5) {
-             const target = state[opponent].board.find(c => c.attacking);
-             if (target) { dispatch({ type: 'CAST_SPELL', player: actor, cardId: hack.id, target }); return; }
-          }
-      
-          const blockers = state[actor].board.filter(c => c.name === DANDAN_NAME && !c.tapped && !c.blocking);
-          if (blockers.length > 0 && policy.blockBias >= 0.55 && !shouldMakeMistake(difficulty, 0.12, policy)) { dispatch({ type: 'TOGGLE_BLOCK', cardId: blockers[0].id, player: actor }); return; }
-      }
-      dispatch({ type: 'PASS_PRIORITY', player: actor }); return;
-    }
-
-    if (state.turn === actor && (state.phase === 'main1' || state.phase === 'main2' || state.phase === 'upkeep')) {
-      const landsInPlay = state[actor].board.filter(c => c.isLand).length;
-      const land = state[actor].hand.find(c => c.isLand);
-      if (state.phase !== 'upkeep' && land && state[actor].landsPlayed === 0 && landsInPlay < policy.landLimit) { dispatch({ type: 'PLAY_LAND', player: actor, cardId: land.id }); return; }
-      
-      const dandan = state[actor].hand.find(c => c.name === DANDAN_NAME);
-      const opponentHasIsland = controlsIsland(state[opponent].board);
-       if (state.phase !== 'upkeep' && canCast(dandan) && opponentHasIsland && !shouldMakeMistake(difficulty, 0.06, policy)) { dispatch({ type: 'CAST_SPELL', player: actor, cardId: dandan.id }); return; }
-      
-      const hack = state[actor].hand.find(c => ['Magical Hack', 'Crystal Spray', 'Metamorphose'].includes(c.name));
-      if (state.phase !== 'upkeep' && canCast(hack) && state[opponent].board.some(c => c.name === DANDAN_NAME) && policy.control >= 0.42) {
-         const target = state[opponent].board.find(c => c.name === DANDAN_NAME);
-         dispatch({ type: 'CAST_SPELL', player: actor, cardId: hack.id, target }); 
-         return;
-      }
-      
-      const controlMagic = state[actor].hand.find(c => c.name === 'Control Magic');
-      if (state.phase !== 'upkeep' && canCast(controlMagic) && state[opponent].board.some(c => c.name === DANDAN_NAME) && policy.stealBias >= 0.72) {
-        const target = state[opponent].board.find(c => c.name === DANDAN_NAME);
-        dispatch({ type: 'CAST_SPELL', player: actor, cardId: controlMagic.id, target });
-        return;
-      }
-
-      const castableSpells = state[actor].hand.filter(c => !c.isLand && ![DANDAN_NAME, 'Memory Lapse', 'Unsubstantiate', 'Magical Hack', 'Crystal Spray', 'Control Magic', 'Metamorphose'].includes(c.name) && isCastable(c, state, actor));
-      if (castableSpells.length > 0) {
-        const spell = difficulty === 'hard'
-          ? [...castableSpells].sort((a, b) => getSpellPriority(b, policy) - getSpellPriority(a, policy))[0]
-          : difficulty === 'easy'
-            ? randomChoice(castableSpells)
-            : castableSpells[0];
-        if (!shouldMakeMistake(difficulty, 0.08, policy)) {
-          dispatch({ type: 'CAST_SPELL', player: actor, cardId: spell.id });
-          return;
-        }
-      }
-
-      const cycler = state[actor].hand.find(c => isCyclable(c, state, actor));
-      const spareLandsInHand = state[actor].hand.filter(c => c.isLand).length;
-      if (cycler && (landsInPlay >= policy.landLimit || spareLandsInHand > 2)) {
-        dispatch({ type: 'CYCLE_CARD', player: actor, cardId: cycler.id });
-        return;
-      }
-    }
-    
-    dispatch({ type: 'PASS_PRIORITY', player: actor });
+    dispatch(chooseAiAction(state, actor, difficulty, policy));
   };
 
   const handleCardClick = (card, zone) => {
@@ -729,6 +604,47 @@ export default function App() {
      lands.forEach(l => { groups[l.name] = groups[l.name] || []; groups[l.name].push(l); });
      return Object.values(groups);
   };
+
+  const getBoardPermanentStacks = (board) => {
+    const auraMap = {};
+    const looseAuras = [];
+    board
+      .filter(card => !card.isLand && card.name === 'Control Magic')
+      .forEach(card => {
+        if (card.enchantedId) {
+          auraMap[card.enchantedId] = auraMap[card.enchantedId] || [];
+          auraMap[card.enchantedId].push(card);
+        } else {
+          looseAuras.push(card);
+        }
+      });
+
+    const creatureStacks = board
+      .filter(card => !card.isLand && card.name !== 'Control Magic')
+      .map(card => ({
+        key: card.id,
+        permanent: card,
+        attachedAuras: auraMap[card.id] || []
+      }));
+
+    const looseAuraStacks = looseAuras.map(card => ({
+      key: card.id,
+      permanent: card,
+      attachedAuras: []
+    }));
+
+    return [...creatureStacks, ...looseAuraStacks];
+  };
+
+  const canPlayerDeclareAttack = (card) =>
+    !isAiMirror &&
+    state.turn === 'player' &&
+    state.phase === 'declare_attackers' &&
+    state.priority === 'player' &&
+    card.name === DANDAN_NAME &&
+    !card.summoningSickness &&
+    !card.tapped &&
+    canDandanAttackDefender(card, state.ai.board);
 
   if (!preloaded) return <Preloader onComplete={() => setPreloaded(true)} />;
 
@@ -949,6 +865,13 @@ export default function App() {
            <button onClick={() => setViewingZone('graveyard')} className="px-3 py-1.5 bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-300 rounded flex items-center gap-1.5 text-[10px] font-mono font-bold transition-colors shadow-inner">
              <Skull size={14} className="text-slate-400"/> {state.graveyard.length}
            </button>
+           <button
+             onClick={() => setShowExitConfirm(true)}
+             aria-label={isAiMirror ? 'Exit match' : 'Concede game'}
+             className="w-9 h-8 bg-red-950/85 border border-red-700 hover:bg-red-900 text-red-200 rounded flex items-center justify-center transition-colors shadow-inner"
+           >
+             <LogOut size={14} className="text-red-300" />
+           </button>
         </div>
       </div>
       
@@ -978,7 +901,7 @@ export default function App() {
                <div className="flex flex-wrap gap-3 justify-center mb-8">
                   {state.player.hand.map(c => (
                      <div key={c.id} onClick={() => dispatch({ type: 'TOGGLE_PENDING_SELECT', cardId: c.id })} className={`cursor-pointer transition-all duration-200 ${state.pendingAction.selected.includes(c.id) ? 'ring-4 ring-blue-500 rounded-md shadow-[0_10px_20px_rgba(37,99,235,0.5)]' : 'opacity-80 hover:opacity-100'}`}>
-                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} />
+                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} disableHoverLift />
                      </div>
                   ))}
                </div>
@@ -1035,8 +958,8 @@ export default function App() {
                <p className="text-slate-300 text-sm mb-6">Select an Instant or Sorcery from your graveyard to put on top of your library. Or skip.</p>
                <div className="flex flex-wrap gap-2 justify-center mb-6 overflow-y-auto custom-scrollbar p-2 w-full">
                   {state.graveyard.filter(c => state.pendingAction.validTargets.includes(c.id)).map(c => (
-                     <div key={c.id} onClick={() => dispatch({ type: 'SUBMIT_PENDING_ACTION', selectedCardId: c.id })} className="cursor-pointer hover:-translate-y-2 transition-transform">
-                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} />
+                     <div key={c.id} onClick={() => dispatch({ type: 'SUBMIT_PENDING_ACTION', selectedCardId: c.id })} className="cursor-pointer transition-all hover:opacity-100 opacity-90">
+                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} disableHoverLift />
                      </div>
                   ))}
                </div>
@@ -1093,7 +1016,7 @@ export default function App() {
                <div className="flex flex-wrap gap-2 justify-center mb-6">
                   {state.player.hand.map(c => (
                      <div key={c.id} onClick={() => dispatch({ type: 'TOGGLE_PENDING_SELECT', cardId: c.id })} className={`cursor-pointer transition-transform ${state.pendingAction.selected.includes(c.id) ? 'ring-4 ring-blue-500 rounded-md shadow-[0_10px_20px_rgba(37,99,235,0.45)]' : 'opacity-80'}`}>
-                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} />
+                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} disableHoverLift />
                      </div>
                   ))}
                </div>
@@ -1110,7 +1033,7 @@ export default function App() {
                <div className="flex flex-wrap gap-2 justify-center mb-6">
                   {state.player.hand.map(c => (
                      <div key={c.id} onClick={() => dispatch({ type: 'TOGGLE_PENDING_SELECT', cardId: c.id })} className={`cursor-pointer transition-transform ${state.pendingAction.selected.includes(c.id) ? 'ring-4 ring-red-500 rounded-md shadow-[0_10px_20px_rgba(239,68,68,0.4)]' : 'opacity-80'}`}>
-                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} />
+                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} disableHoverLift />
                      </div>
                   ))}
                </div>
@@ -1143,7 +1066,7 @@ export default function App() {
                <div className="flex gap-4 justify-center mb-6">
                   {state.pendingAction.cards.map(c => (
                      <div key={c.id} className="flex flex-col items-center gap-2">
-                        <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} />
+                       <Card card={c} official={useOfficialCards} onZoom={setZoomedCard} disableHoverLift />
                         <button onClick={() => dispatch({ type: 'UPDATE_TELLING_TIME', cardId: c.id, dest: 'hand' })} className={`w-full text-[10px] font-bold py-1 rounded transition-colors ${state.pendingAction.hand === c.id ? 'bg-blue-600 text-white' : 'bg-slate-800 text-slate-400'}`}>HAND</button>
                         <button onClick={() => dispatch({ type: 'UPDATE_TELLING_TIME', cardId: c.id, dest: 'top' })} className={`w-full text-[10px] font-bold py-1 rounded transition-colors ${state.pendingAction.top === c.id ? 'bg-green-600 text-white' : 'bg-slate-800 text-slate-400'}`}>TOP</button>
                      </div>
@@ -1177,7 +1100,7 @@ export default function App() {
                            <button disabled={i === 0} onClick={() => dispatch({ type: 'REORDER_HALIMAR', from: i, to: i - 1 })} className="px-2 py-1 rounded bg-slate-800 text-slate-300 disabled:opacity-30">←</button>
                            <button disabled={i === state.pendingAction.cards.length - 1} onClick={() => dispatch({ type: 'REORDER_HALIMAR', from: i, to: i + 1 })} className="px-2 py-1 rounded bg-slate-800 text-slate-300 disabled:opacity-30">→</button>
                         </div>
-                        <Card card={c} official={useOfficialCards} onZoom={null} />
+                        <Card card={c} official={useOfficialCards} onZoom={null} disableHoverLift />
                         <div className="absolute -bottom-6 w-full text-center text-[10px] font-bold text-slate-400">
                            {i === 0 ? 'TOP' : i === state.pendingAction.cards.length - 1 ? 'BOTTOM' : ''}
                         </div>
@@ -1204,12 +1127,36 @@ export default function App() {
         </div>
       )}
 
+      {showExitConfirm && (
+        <div className="absolute inset-0 bg-black/80 z-[120] flex flex-col items-center justify-center p-4 backdrop-blur-md">
+          <div className="bg-slate-900 p-6 rounded-xl border border-slate-700 shadow-2xl w-full max-w-sm flex flex-col items-center text-center">
+            <h3 className="font-arena-display text-xl font-bold text-red-300 mb-2 tracking-[0.12em] uppercase">
+              {isAiMirror ? 'Exit Match' : 'Concede'}
+            </h3>
+            <p className="text-slate-300 text-sm mb-6">
+              {isAiMirror
+                ? 'Do you want to leave this match and go back to the menu?'
+                : 'Do you want to concede and go back to the menu?'}
+            </p>
+            <div className="flex gap-4 w-full">
+              <button onClick={() => setShowExitConfirm(false)} className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl transition-colors">
+                Cancel
+              </button>
+              <button onClick={() => { setShowExitConfirm(false); dispatch({ type: 'RETURN_TO_MENU' }); }} className="flex-1 py-3 bg-red-700 hover:bg-red-600 text-white font-bold rounded-xl transition-colors">
+                Exit
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ARENA STYLE PASS BUTTON - MOVED TO BOTTOM RIGHT */}
       {!isAiMirror && <div className="absolute bottom-6 right-4 sm:bottom-8 sm:right-8 z-[150] flex flex-col items-center pointer-events-auto">
          <button
            disabled={state.priority !== 'player' || state.stackResolving || isAutoPassing}
            onClick={() => { AudioEngine.init(); dispatch({ type: 'PASS_PRIORITY', player: 'player' }); }}
-           className={`relative group overflow-hidden w-16 h-16 sm:w-20 sm:h-20 rounded-full flex flex-col items-center justify-center gap-1 transition-all shadow-[0_0_25px_rgba(0,0,0,0.8)] border-2 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 ${
+           onTouchEnd={(e) => e.currentTarget.blur()}
+           className={`arena-pass-button relative group overflow-hidden w-16 h-16 sm:w-20 sm:h-20 rounded-full flex flex-col items-center justify-center gap-1 transition-all shadow-[0_0_25px_rgba(0,0,0,0.8)] border-2 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 ${
               isAutoPassing ? 'bg-amber-900 border-amber-500 animate-pulse text-amber-400' :
               state.priority === 'player' && !state.stackResolving ? `${btnColorClass} hover:scale-[1.05]` : 'bg-slate-800 border-slate-700 text-slate-500'
            }`}
@@ -1266,12 +1213,22 @@ export default function App() {
               </div>
            </div>
            <div className="h-[50%] flex gap-2 justify-center items-center px-4 custom-scrollbar mt-1">
-              {state.ai.board.filter(c => !c.isLand).map(c => <Card key={c.id} card={c} zone="board" official={useOfficialCards} onZoom={setZoomedCard} targetable={isValidTarget(c, 'board', state)} onClick={(card) => handleCardClick(card, 'board')} />)}
+              {getBoardPermanentStacks(state.ai.board).map(({ key, permanent, attachedAuras }) => (
+                <AttachedPermanentStack
+                  key={key}
+                  permanent={permanent}
+                  attachedAuras={attachedAuras}
+                  official={useOfficialCards}
+                  state={state}
+                  onZoom={setZoomedCard}
+                  onClick={(card) => handleCardClick(card, 'board')}
+                />
+              ))}
            </div>
         </div>
 
         {/* TRENCH / MIDDLE ZONE */}
-        <div className="h-[20%] shrink-0 relative flex items-center justify-center px-2 sm:px-4 z-30 bg-black/40 border-y border-blue-900/30 shadow-[0_0_40px_rgba(0,0,0,0.6)] backdrop-blur-sm">
+        <div className="h-[20%] shrink-0 relative px-2 sm:px-4 z-30 bg-black/40 border-y border-blue-900/30 shadow-[0_0_40px_rgba(0,0,0,0.6)] backdrop-blur-sm overflow-visible">
           
           {/* Glowing central divider */}
           <div className="absolute top-1/2 left-0 w-full h-px bg-gradient-to-r from-transparent via-blue-500/50 to-transparent shadow-[0_0_15px_rgba(59,130,246,0.8)] -translate-y-1/2 pointer-events-none" />
@@ -1281,9 +1238,9 @@ export default function App() {
               <PhaseTracker currentPhase={state.phase} turn={state.turn} />
           </div>
 
-          <div className="flex-1 flex gap-1 items-center justify-center px-2 relative z-40">
+          <div className="absolute inset-0 flex items-center justify-center px-2 z-40 pointer-events-none">
              {state.stack.map((s, i) => (
-                <div key={s.card.id} className="relative group shrink-0 animate-in zoom-in-50 duration-200" style={{ zIndex: i, marginLeft: i === 0 ? 0 : -18 }}>
+                <div key={s.card.id} className="relative group shrink-0 animate-in zoom-in-50 duration-200 pointer-events-auto" style={{ zIndex: i, marginLeft: i === 0 ? 0 : -18 }}>
                   <Card card={s.card} zone="stack" official={useOfficialCards} onZoom={setZoomedCard} targetable={isValidTarget(s.card, 'stack', state)} onClick={() => handleCardClick(s.card, 'stack')} />
                 </div>
              ))}
@@ -1312,8 +1269,17 @@ export default function App() {
            </div>
 
            <div className="h-[30%] flex gap-2 justify-center items-center px-4 mt-6 sm:mt-8">
-              {state.player.board.filter(c => !c.isLand).map(c => (
-                 <Card key={c.id} card={c} zone="board" official={useOfficialCards} onZoom={setZoomedCard} targetable={isValidTarget(c, 'board', state)} onClick={(card) => handleCardClick(card, 'board')} />
+              {getBoardPermanentStacks(state.player.board).map(({ key, permanent, attachedAuras }) => (
+                 <AttachedPermanentStack
+                   key={key}
+                   permanent={permanent}
+                   attachedAuras={attachedAuras}
+                   official={useOfficialCards}
+                   state={state}
+                   onZoom={setZoomedCard}
+                   onClick={(card) => handleCardClick(card, 'board')}
+                   subtleHighlight={canPlayerDeclareAttack(permanent)}
+                 />
               ))}
            </div>
            <div className="h-[25%] min-h-[108px] sm:min-h-[132px] flex items-center px-3 sm:px-4 mt-1 overflow-visible">
