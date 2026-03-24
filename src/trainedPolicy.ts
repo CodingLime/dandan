@@ -1,19 +1,19 @@
 export const trainedPolicy = {
   "source": "engine-genetic-selfplay",
-  "generatedAt": "2026-03-24T09:17:08.710Z",
-  "budgetMinutes": 120,
-  "gamesPerSeat": 12,
-  "generations": 5577,
-  "championScore": 4223.15,
+  "generatedAt": "2026-03-24T14:39:36.788Z",
+  "budgetMinutes": 3,
+  "gamesPerSeat": 3,
+  "generations": 275,
+  "championScore": 4553.2,
   "weights": {
-    "aggression": 1.7304376443447482,
-    "control": 1.2048075530521947,
-    "drawBias": 1.3044440815710885,
-    "mistakeRate": 0.0644403715410137,
-    "landLimit": 5.464816926065888,
-    "counterBias": 0.9825697281700793,
-    "stealBias": 2.0304905788127563,
-    "attackBias": 2.140181033385772,
-    "blockBias": 1.4785693819983585
+    "aggression": 2.255976075451557,
+    "control": 0.5651037720856604,
+    "drawBias": 1.2611131058364924,
+    "mistakeRate": 0.07667620199293759,
+    "landLimit": 5.34120475192171,
+    "counterBias": 0.7320190069450484,
+    "stealBias": 2.0194459015118578,
+    "attackBias": 2.435085435367625,
+    "blockBias": 0.24262390847653723
   }
 };
