@@ -504,9 +504,7 @@ const applyLandTypeChoiceToCard = (card, landType, duration = 'permanent') => {
   }
 
   const transformed = applyTextChangeStateSnapshot(card, snapshot);
-  return card.temporaryTextChangeBaseState
-    ? { ...transformed, temporaryTextChangeBaseState: snapshot }
-    : transformed;
+  return clearTemporaryTextChangeState(transformed);
 };
 const expireTemporaryTextChange = (card) => {
   if (!card.temporaryTextChangeBaseState) return card;
@@ -1759,6 +1757,9 @@ const getTransformTargetChoiceCandidates = (state, actor, target) => {
     const nextOpponentBoard = targetController === opponent
       ? getBoardAfterTransformingPermanent(opponentBoard, target.id, landTypeChoice)
       : opponentBoard;
+    const opposingDandansLosingSupport = targetController === opponent
+      ? countDandansLosingSupport(opponentBoard, nextOpponentBoard)
+      : 0;
 
     const actorSupportedDelta = countSupportedDandans(nextActorBoard) - countSupportedDandans(actorBoard);
     const opponentSupportedDelta = countSupportedDandans(nextOpponentBoard) - countSupportedDandans(opponentBoard);
@@ -1793,7 +1794,7 @@ const getTransformTargetChoiceCandidates = (state, actor, target) => {
       score += 0.4;
     }
 
-    return { target, targetController, landTypeChoice, score };
+    return { target, targetController, landTypeChoice, score, opposingDandansLosingSupport };
   }).sort((left, right) => right.score - left.score);
 };
 
@@ -1802,7 +1803,11 @@ const getTransformTargetCandidates = (state, actor) => {
   const targets = [...state[opponent].board, ...state[actor].board]
     .filter(card => card.name === DANDAN_NAME || card.isLand);
   const candidates = targets.flatMap(target => getTransformTargetChoiceCandidates(state, actor, target));
-  return candidates.filter(candidate => candidate.score > 2).sort((left, right) => right.score - left.score);
+  return candidates.filter(candidate => {
+    if (candidate.score <= 2) return false;
+    if (!candidate.target.isLand) return true;
+    return candidate.targetController === opponent && candidate.opposingDandansLosingSupport > 1;
+  }).sort((left, right) => right.score - left.score);
 };
 const pickTransformTarget = (state, actor) => getTransformTargetCandidates(state, actor)[0] || null;
 const chooseLandTypeForTransformTarget = (state, actor, target) => {

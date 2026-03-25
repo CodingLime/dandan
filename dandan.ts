@@ -862,9 +862,6 @@ const StackedLandGroup = ({ lands, official, state, zone, onZoom, onClick, activ
   const total = lands.length;
   const { mobile, desktop } = getLandStackStep(total);
   const orderedLands = [...lands].sort((a, b) => {
-    const aActivatable = zone === 'board' && activatablePlayer ? isActivatable(a, state, activatablePlayer) : false;
-    const bActivatable = zone === 'board' && activatablePlayer ? isActivatable(b, state, activatablePlayer) : false;
-    if (aActivatable !== bActivatable) return aActivatable ? 1 : -1;
     if (a.tapped !== b.tapped) return a.tapped ? -1 : 1;
     if (a.name !== b.name) return a.name.localeCompare(b.name);
     return a.id.localeCompare(b.id);
