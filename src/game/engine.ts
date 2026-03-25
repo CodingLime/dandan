@@ -742,12 +742,34 @@ const resetHiddenKnowledge = (state) => {
     KNOWLEDGE_PLAYERS.forEach(owner => clearKnownHand(state, viewer, owner));
   });
 };
+const createPeerMulliganState = () => ({
+  counts: { player: 0, ai: 0 },
+  kept: { player: false, ai: false }
+});
+const isPeerGame = (state) => state.gameMode === 'peer';
+const isHumanControlledSeat = (state, seat) => state.gameMode === 'peer' || (seat === 'player' && state.gameMode !== 'ai_vs_ai');
+const getSeatLabel = (seat) => seat === 'player' ? 'You' : 'Opponent';
+const getPeerMulliganState = (state) => state.peerMulligan || createPeerMulliganState();
+const getPeerMulliganCount = (state, seat) => getPeerMulliganState(state).counts?.[seat] || 0;
+const markPeerSeatKept = (state, seat) => {
+  state.peerMulligan = getPeerMulliganState(state);
+  state.peerMulligan.kept[seat] = true;
+};
+const setPeerMulliganCount = (state, seat, count) => {
+  state.peerMulligan = getPeerMulliganState(state);
+  state.peerMulligan.counts[seat] = count;
+};
+const haveBothPeerSeatsKept = (state) => {
+  const peerMulligan = getPeerMulliganState(state);
+  return Boolean(peerMulligan.kept.player && peerMulligan.kept.ai);
+};
 
 // --- GAME STATE ENGINE ---
 export const initialState = {
   started: false, deck: [], graveyard: [], exile: [], stack: [], knowledge: createKnowledgeState(), turn: 'player', phase: 'mulligan', priority: 'player',
   consecutivePasses: 0, actionCount: 0, pendingTargetSelection: null, pendingAction: null,
   mulliganCount: 0, isFirstTurn: true,
+  peerMulligan: null,
   gameMode: 'player',
   difficulty: 'medium',
   playerAiCharacterId: null,
@@ -812,6 +834,7 @@ const restoreSavedGameState = (snapshot) => {
     },
     pendingAction: restored.pendingAction || null,
     pendingTargetSelection: restored.pendingTargetSelection || null,
+    peerMulligan: restored.peerMulligan || null,
     winner: restored.winner || null,
     log: Array.isArray(restored.log) ? restored.log : []
   };
@@ -2945,6 +2968,9 @@ export const createGameReducer = (effects = defaultEffects) => {
     case 'RETURN_TO_MENU':
       return { ...initialState };
 
+    case 'HYDRATE_PEER_STATE':
+      return action.state ? structuredClone(action.state) : s;
+
     case 'LOAD_SAVED_GAME':
       return restoreSavedGameState(action.snapshot);
 
@@ -2963,6 +2989,7 @@ export const createGameReducer = (effects = defaultEffects) => {
       const gameMode = action.mode || 'player';
       const difficulty = action.difficulty || 'medium';
       const startingDeck = action.deck ? structuredClone(action.deck) : initializeDeck();
+      const peerGame = gameMode === 'peer';
       s = { 
          ...initialState, 
          started: true, 
@@ -2973,7 +3000,7 @@ export const createGameReducer = (effects = defaultEffects) => {
          deck: startingDeck,
          knowledge: createKnowledgeState(),
          graveyard: [], exile: [], stack: [], log: [], winner: null,
-         phase: gameMode === 'ai_vs_ai' ? 'upkeep' : 'mulligan', turn: 'player', priority: 'player', mulliganCount: 0, isFirstTurn: true,
+         phase: gameMode === 'ai_vs_ai' ? 'upkeep' : 'mulligan', turn: 'player', priority: 'player', mulliganCount: 0, peerMulligan: peerGame ? createPeerMulliganState() : null, isFirstTurn: true,
          player: { life: 20, hand: [], board: [], landsPlayed: 0 },
          ai: { life: 20, hand: [], board: [], landsPlayed: 0 },
          floatingMana: { player: { total: 0, blue: 0 }, ai: { total: 0, blue: 0 } },
@@ -2983,37 +3010,64 @@ export const createGameReducer = (effects = defaultEffects) => {
          pendingAction: null, pendingTargetSelection: null
       };
       drawAlternating(s, 'player', 7);
-      const playerAiMulligans = runAiOpeningMulligans(s, 'player');
-      const aiMulligans = runAiOpeningMulligans(s, 'ai');
+      const playerAiMulligans = gameMode === 'ai_vs_ai' ? runAiOpeningMulligans(s, 'player') : 0;
+      const aiMulligans = peerGame ? 0 : runAiOpeningMulligans(s, 'ai');
       if (gameMode === 'ai_vs_ai' && playerAiMulligans > 0) logAction(`AI South mulliganed to ${7 - playerAiMulligans}.`);
       if (aiMulligans > 0) logAction(`${gameMode === 'ai_vs_ai' ? 'AI North' : 'Opponent'} mulliganed to ${7 - aiMulligans}.`);
-      logAction(gameMode === 'ai_vs_ai' ? "AI mirror started." : "Game started. Mulligan phase.");
+      logAction(gameMode === 'ai_vs_ai' ? "AI mirror started." : peerGame ? "Friend match started. Both players choose to keep or mulligan." : "Game started. Mulligan phase.");
       return s;
 
     case 'MULLIGAN':
-      if ((s.mulliganCount || 0) >= 7) return s;
-      s.deck = [...s.deck, ...s.player.hand];
-      s.player.hand = [];
-      resetHiddenKnowledge(s);
-      for (let i = s.deck.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [s.deck[i], s.deck[j]] = [s.deck[j], s.deck[i]];
+      {
+        const mulliganPlayer = action.player || 'player';
+        if (s.phase !== 'mulligan' || s.priority !== mulliganPlayer) return s;
+        const mulliganCount = isPeerGame(s) ? getPeerMulliganCount(s, mulliganPlayer) : (s.mulliganCount || 0);
+        if (mulliganCount >= 7) return s;
+        s.deck = [...s.deck, ...s[mulliganPlayer].hand];
+        s[mulliganPlayer].hand = [];
+        resetHiddenKnowledge(s);
+        for (let i = s.deck.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [s.deck[i], s.deck[j]] = [s.deck[j], s.deck[i]];
+        }
+        drawCards(s, mulliganPlayer, 7);
+        if (isPeerGame(s)) {
+          setPeerMulliganCount(s, mulliganPlayer, mulliganCount + 1);
+          logAction(`${getSeatLabel(mulliganPlayer)} mulliganed to ${7 - getPeerMulliganCount(s, mulliganPlayer)}. Draw 7 and choose whether to keep.`);
+        } else {
+          s.mulliganCount = mulliganCount + 1;
+          logAction(`You mulliganed to ${7 - s.mulliganCount}. Draw 7 and choose whether to keep.`);
+        }
+        s.pendingAction = null;
+        return s;
       }
-      drawCards(s, 'player', 7);
-      s.mulliganCount = (s.mulliganCount || 0) + 1;
-      s.pendingAction = null;
-      logAction(`You mulliganed to ${7 - s.mulliganCount}. Draw 7 and choose whether to keep.`);
-      return s;
 
     case 'KEEP_HAND':
-      if ((s.mulliganCount || 0) > 0) {
-         s.pendingAction = { type: 'MULLIGAN_BOTTOM', count: s.mulliganCount, selected: [] };
-         logAction(`You kept. Put ${s.mulliganCount} card(s) on the bottom.`);
-         return s;
+      {
+        const keepPlayer = action.player || 'player';
+        if (s.phase !== 'mulligan' || s.priority !== keepPlayer) return s;
+        const mulliganCount = isPeerGame(s) ? getPeerMulliganCount(s, keepPlayer) : (s.mulliganCount || 0);
+        if (mulliganCount > 0) {
+           s.pendingAction = { type: 'MULLIGAN_BOTTOM', player: keepPlayer, count: mulliganCount, selected: [] };
+           logAction(`${getSeatLabel(keepPlayer)} kept. Put ${mulliganCount} card(s) on the bottom.`);
+           return s;
+        }
+        if (isPeerGame(s)) {
+          markPeerSeatKept(s, keepPlayer);
+          if (haveBothPeerSeatsKept(s)) {
+            s.phase = 'upkeep';
+            s.priority = 'player';
+            logAction(`Both players kept. Beginning Turn 1 Upkeep.`);
+          } else {
+            s.priority = getOpponent(keepPlayer);
+            logAction(`${getSeatLabel(keepPlayer)} kept. Waiting for the other player.`);
+          }
+          return s;
+        }
+        s.phase = 'upkeep';
+        logAction(`You kept your hand. Beginning Turn 1 Upkeep.`);
+        return s;
       }
-      s.phase = 'upkeep';
-      logAction(`You kept your hand. Beginning Turn 1 Upkeep.`);
-      return s;
 
     case 'DRAW':
       if (s.deck.length === 0) { s.winner = action.player === 'player' ? 'ai' : 'player'; return s; }
@@ -3044,14 +3098,14 @@ export const createGameReducer = (effects = defaultEffects) => {
                 }
             }
             clearKnownTop(s, getOpponent(action.player));
-            if (action.player === 'player') {
-                setKnownTop(s, 'player', viewed);
-                s.pendingAction = { type: 'HALIMAR_DEPTHS', cards: viewed };
+            if (isHumanControlledSeat(s, action.player)) {
+                setKnownTop(s, action.player, viewed);
+                s.pendingAction = { type: 'HALIMAR_DEPTHS', player: action.player, cards: viewed };
             } else {
-                const ordered = getAiLibraryOrder(s, 'ai', viewed, getAiPolicyForActor(s, 'ai'));
+                const ordered = getAiLibraryOrder(s, action.player, viewed, getAiPolicyForActor(s, action.player));
                 ordered.slice().reverse().forEach(card => s.deck.push(card));
-                setKnownTop(s, 'ai', ordered);
-                logAction(`AI reordered the top cards with Halimar Depths.`);
+                setKnownTop(s, action.player, ordered);
+                logAction(`${action.player === 'player' ? 'Player' : 'AI'} reordered the top cards with Halimar Depths.`);
             }
         }
         if (land.name === 'Mystic Sanctuary') {
@@ -3060,15 +3114,15 @@ export const createGameReducer = (effects = defaultEffects) => {
                 land.tapped = false;
                 const validSpells = s.graveyard.filter(c => INSTANT_OR_SORCERY_TYPES.some(type => c.type.includes(type)));
                 if (validSpells.length > 0) {
-                    if (action.player === 'player') {
-                        s.pendingAction = { type: 'MYSTIC_SANCTUARY', validTargets: validSpells.map(c=>c.id) };
+                    if (isHumanControlledSeat(s, action.player)) {
+                        s.pendingAction = { type: 'MYSTIC_SANCTUARY', player: action.player, validTargets: validSpells.map(c=>c.id) };
                     } else {
-                        const spell = getAiSanctuaryTarget(s, 'ai', validSpells, getAiPolicyForActor(s, 'ai'));
+                        const spell = getAiSanctuaryTarget(s, action.player, validSpells, getAiPolicyForActor(s, action.player));
                         if (spell) {
                           s.graveyard = s.graveyard.filter(c => c.id !== spell.id);
                           s.deck.push(spell);
                           prependKnownTopCard(s, 'all', spell);
-                          logAction(`AI put ${spell.name} on top with Mystic Sanctuary.`);
+                          logAction(`${action.player === 'player' ? 'Player' : 'AI'} put ${spell.name} on top with Mystic Sanctuary.`);
                         }
                     }
                 }
@@ -3090,14 +3144,16 @@ export const createGameReducer = (effects = defaultEffects) => {
       return s;
 
     case 'PROMPT_HAND_LAND_ACTION': {
-      const handCard = s.player.hand.find(c => c.id === action.cardId);
+      const promptPlayer = action.player || 'player';
+      const handCard = s[promptPlayer].hand.find(c => c.id === action.cardId);
       if (!handCard || !handCard.isLand) return s;
       const cyclingCost = getCyclingCost(handCard.name);
-      const canPlay = isCastable(handCard, s, 'player');
-      const canCycle = isCyclable(handCard, s, 'player');
+      const canPlay = isCastable(handCard, s, promptPlayer);
+      const canCycle = isCyclable(handCard, s, promptPlayer);
       if (!canPlay && !canCycle) return s;
       s.pendingAction = {
         type: 'HAND_LAND_ACTION',
+        player: promptPlayer,
         cardId: handCard.id,
         cardName: handCard.name,
         canPlay,
@@ -3147,7 +3203,7 @@ export const createGameReducer = (effects = defaultEffects) => {
     case 'CAST_SPELL': {
       const p = action.player;
       const opp = p === 'player' ? 'ai' : 'player';
-      const isHumanControlledPlayer = p === 'player' && s.gameMode !== 'ai_vs_ai';
+      const isHumanControlledPlayer = isHumanControlledSeat(s, p);
       const handIdx = s[p].hand.findIndex(c => c.id === action.cardId);
       if (handIdx === -1) return s;
       const card = s[p].hand[handIdx];
@@ -3155,7 +3211,7 @@ export const createGameReducer = (effects = defaultEffects) => {
       const targetDependent = ['Memory Lapse', 'Unsubstantiate', 'Control Magic', 'Magical Hack', 'Crystal Spray', 'Metamorphose'];
       
       if (!action.target && isHumanControlledPlayer && targetDependent.includes(card.name)) {
-         s.pendingTargetSelection = { cardId: action.cardId, spellName: card.name };
+         s.pendingTargetSelection = { cardId: action.cardId, spellName: card.name, player: p };
          return s;
       }
       
@@ -3175,6 +3231,7 @@ export const createGameReducer = (effects = defaultEffects) => {
       if (isHumanControlledPlayer && isLandTypeChoiceSpell(card.name) && !isLandTypeChoice(action.landTypeChoice)) {
         s.pendingAction = {
           type: 'LAND_TYPE_CHOICE',
+          player: p,
           cardId: action.cardId,
           spellName: card.name,
           targetId: target.id,
@@ -3200,12 +3257,12 @@ export const createGameReducer = (effects = defaultEffects) => {
     }
 
     case 'CAST_WITH_TARGET': {
-      const p = 'player';
+      const p = s.pendingTargetSelection?.player || 'player';
       const cardId = s.pendingTargetSelection.cardId;
-      const handIdx = s.player.hand.findIndex(c => c.id === cardId);
+      const handIdx = s[p].hand.findIndex(c => c.id === cardId);
       if (handIdx === -1) return { ...s, pendingTargetSelection: null };
       
-      const card = s.player.hand[handIdx];
+      const card = s[p].hand[handIdx];
       let targetObj = null;
       if (action.targetZone === 'stack') targetObj = s.stack.find(c => c.card.id === action.targetId);
       if (action.targetZone === 'board') targetObj = s.player.board.find(c => c.id === action.targetId) || s.ai.board.find(c => c.id === action.targetId);
@@ -3214,6 +3271,7 @@ export const createGameReducer = (effects = defaultEffects) => {
         s.pendingTargetSelection = null;
         s.pendingAction = {
           type: 'LAND_TYPE_CHOICE',
+          player: p,
           cardId,
           spellName: card.name,
           targetId: targetObj.id,
@@ -3222,19 +3280,19 @@ export const createGameReducer = (effects = defaultEffects) => {
         return s;
       }
 
-      if (!canPayCost(s.player.board, getManaPool(s, 'player'), card.cost, card.blueRequirement || 0)) return { ...s, pendingTargetSelection: null };
+      if (!canPayCost(s[p].board, getManaPool(s, p), card.cost, card.blueRequirement || 0)) return { ...s, pendingTargetSelection: null };
       effects.playCast();
-      const targetCastPayment = spendMana(s.player.board, getManaPool(s, 'player'), card.cost, card.blueRequirement || 0);
-      s.player.board = targetCastPayment.board;
-      s.floatingMana.player = targetCastPayment.pool;
-      s.player.hand.splice(handIdx, 1);
-      removeKnownHandCard(s, 'player', card.id);
+      const targetCastPayment = spendMana(s[p].board, getManaPool(s, p), card.cost, card.blueRequirement || 0);
+      s[p].board = targetCastPayment.board;
+      s.floatingMana[p] = targetCastPayment.pool;
+      s[p].hand.splice(handIdx, 1);
+      removeKnownHandCard(s, p, card.id);
       
-      s.stack.push({ card, controller: 'player', target: targetObj, landTypeChoice: null });
+      s.stack.push({ card, controller: p, target: targetObj, landTypeChoice: null });
       s.pendingTargetSelection = null;
       s.consecutivePasses = 0;
-      s.priority = 'ai';
-      logAction(`You cast ${card.name} targeting ${targetObj ? (targetObj.card ? targetObj.card.name : targetObj.name) : 'something'}.`);
+      s.priority = getOpponent(p);
+      logAction(`${getSeatLabel(p)} cast ${card.name} targeting ${targetObj ? (targetObj.card ? targetObj.card.name : targetObj.name) : 'something'}.`);
       return s;
     }
 
@@ -3369,34 +3427,34 @@ export const createGameReducer = (effects = defaultEffects) => {
         drawCards(s, spell.controller, 3);
         clearKnownTop(s, getOpponent(spell.controller));
         forgetPrivateHandInfoFromOpponent(s, spell.controller);
-        if (spell.controller === 'player') {
-            clearKnownTop(s, 'player');
-            s.pendingAction = { type: 'BRAINSTORM', count: 2, selected: [] };
+        if (isHumanControlledSeat(s, spell.controller)) {
+            clearKnownTop(s, spell.controller);
+            s.pendingAction = { type: 'BRAINSTORM', player: spell.controller, count: 2, selected: [] };
             s.stackResolving = false;
             return s;
         } else {
-            const putBackCards = getAiPutBackCards(s, 'ai', 2, getAiPolicyForActor(s, 'ai'));
+            const putBackCards = getAiPutBackCards(s, spell.controller, 2, getAiPolicyForActor(s, spell.controller));
             putBackCards.forEach(card => {
-              const idx = s.ai.hand.findIndex(entry => entry.id === card.id);
-              if (idx > -1) s.deck.push(s.ai.hand.splice(idx, 1)[0]);
+              const idx = s[spell.controller].hand.findIndex(entry => entry.id === card.id);
+              if (idx > -1) s.deck.push(s[spell.controller].hand.splice(idx, 1)[0]);
             });
-            setKnownTop(s, 'ai', [...putBackCards].reverse());
+            setKnownTop(s, spell.controller, [...putBackCards].reverse());
         }
       }
       else if (spell.card.name === 'Chart a Course') {
         s.graveyard.push(spell.card);
         drawCards(s, spell.controller, 2);
         if (!s.hasAttacked[spell.controller]) {
-            if (spell.controller === 'player') {
-                s.pendingAction = { type: 'DISCARD', count: 1, selected: [] };
+            if (isHumanControlledSeat(s, spell.controller)) {
+                s.pendingAction = { type: 'DISCARD', player: spell.controller, count: 1, selected: [] };
                 s.stackResolving = false;
                 return s;
             } else {
-                const discardId = pickAiPendingCards(s, 'ai', 1, getAiPolicyForActor(s, 'ai'))[0];
-                const discardIdx = s.ai.hand.findIndex(card => card.id === discardId);
+                const discardId = pickAiPendingCards(s, spell.controller, 1, getAiPolicyForActor(s, spell.controller))[0];
+                const discardIdx = s[spell.controller].hand.findIndex(card => card.id === discardId);
                 if (discardIdx > -1) {
-                  const [discarded] = s.ai.hand.splice(discardIdx, 1);
-                  removeKnownHandCard(s, 'ai', discarded.id);
+                  const [discarded] = s[spell.controller].hand.splice(discardIdx, 1);
+                  removeKnownHandCard(s, spell.controller, discarded.id);
                   s.graveyard.push(discarded);
                 }
             }
@@ -3413,32 +3471,32 @@ export const createGameReducer = (effects = defaultEffects) => {
           }
         }
         clearKnownTop(s, getOpponent(spell.controller));
-        if (spell.controller === 'player') {
-            s.pendingAction = { type: 'TELLING_TIME', cards: viewed, hand: null, top: null };
+        if (isHumanControlledSeat(s, spell.controller)) {
+            s.pendingAction = { type: 'TELLING_TIME', player: spell.controller, cards: viewed, hand: null, top: null };
             s.stackResolving = false;
             return s;
         } else {
-            const { handCard, topCard, bottomCard } = getAiTellingTimePlan(s, 'ai', viewed, getAiPolicyForActor(s, 'ai'));
+            const { handCard, topCard, bottomCard } = getAiTellingTimePlan(s, spell.controller, viewed, getAiPolicyForActor(s, spell.controller));
             if (bottomCard) s.deck.unshift(bottomCard);
             if (topCard) s.deck.push(topCard);
-            if (handCard) { handCard.owner = 'ai'; s.ai.hand.push(handCard); }
-            setKnownTop(s, 'ai', topCard ? [topCard] : []);
+            if (handCard) { handCard.owner = spell.controller; s[spell.controller].hand.push(handCard); }
+            setKnownTop(s, spell.controller, topCard ? [topCard] : []);
         }
       }
       else if (spell.card.name === 'Predict') {
         s.graveyard.push(spell.card);
-        if (spell.controller === 'player') {
-            s.pendingAction = { type: 'PREDICT', guess: null };
+        if (isHumanControlledSeat(s, spell.controller)) {
+            s.pendingAction = { type: 'PREDICT', player: spell.controller, guess: null };
             s.stackResolving = false;
             return s;
         } else {
-            const guess = getAiPredictGuess(s, 'ai');
+            const guess = getAiPredictGuess(s, spell.controller);
             const milled = s.deck.length ? s.deck.pop() : null;
             if (milled) {
                 consumeTopKnowledgeCard(s, milled);
                 s.graveyard.push(milled);
-                if(milled.name === guess) { drawCards(s, 'ai', 2); } 
-                else { drawCards(s, 'ai', 1); }
+                if(milled.name === guess) { drawCards(s, spell.controller, 2); } 
+                else { drawCards(s, spell.controller, 1); }
             }
         }
       }
@@ -3554,8 +3612,9 @@ export const createGameReducer = (effects = defaultEffects) => {
        return s;
 
     case 'SUBMIT_PENDING_ACTION':
+       const pendingPlayer = s.pendingAction.player || 'player';
        if (s.pendingAction.type === 'LAND_TYPE_CHOICE') {
-           const handIdx = s.player.hand.findIndex(c => c.id === s.pendingAction.cardId);
+           const handIdx = s[pendingPlayer].hand.findIndex(c => c.id === s.pendingAction.cardId);
            const targetObj = s.player.board.find(c => c.id === s.pendingAction.targetId) || s.ai.board.find(c => c.id === s.pendingAction.targetId) || null;
            const chosenLandType = isLandTypeChoice(action.landTypeChoice) ? action.landTypeChoice : null;
            if (handIdx === -1 || !targetObj || !chosenLandType) {
@@ -3563,57 +3622,57 @@ export const createGameReducer = (effects = defaultEffects) => {
              return s;
            }
 
-           const card = s.player.hand[handIdx];
-           if (!canPayCost(s.player.board, getManaPool(s, 'player'), card.cost, card.blueRequirement || 0)) {
+           const card = s[pendingPlayer].hand[handIdx];
+           if (!canPayCost(s[pendingPlayer].board, getManaPool(s, pendingPlayer), card.cost, card.blueRequirement || 0)) {
              s.pendingAction = null;
              return s;
            }
 
            effects.playCast();
-           const castPayment = spendMana(s.player.board, getManaPool(s, 'player'), card.cost, card.blueRequirement || 0);
-           s.player.board = castPayment.board;
-           s.floatingMana.player = castPayment.pool;
-           s.player.hand.splice(handIdx, 1);
-           removeKnownHandCard(s, 'player', card.id);
-           s.stack.push({ card, controller: 'player', target: targetObj, landTypeChoice: chosenLandType });
+           const castPayment = spendMana(s[pendingPlayer].board, getManaPool(s, pendingPlayer), card.cost, card.blueRequirement || 0);
+           s[pendingPlayer].board = castPayment.board;
+           s.floatingMana[pendingPlayer] = castPayment.pool;
+           s[pendingPlayer].hand.splice(handIdx, 1);
+           removeKnownHandCard(s, pendingPlayer, card.id);
+           s.stack.push({ card, controller: pendingPlayer, target: targetObj, landTypeChoice: chosenLandType });
            s.pendingAction = null;
            s.consecutivePasses = 0;
-           s.priority = 'ai';
-           logAction(`You cast ${card.name} targeting ${targetObj.name}, choosing ${chosenLandType}.`);
+           s.priority = getOpponent(pendingPlayer);
+           logAction(`${getSeatLabel(pendingPlayer)} cast ${card.name} targeting ${targetObj.name}, choosing ${chosenLandType}.`);
            return s;
        } else if (s.pendingAction.type === 'BRAINSTORM') {
            const putBackCards = [];
            s.pendingAction.selected.forEach(cardId => {
-               const idx = s.player.hand.findIndex(c => c.id === cardId);
+               const idx = s[pendingPlayer].hand.findIndex(c => c.id === cardId);
                if(idx > -1) {
-                 const [putBack] = s.player.hand.splice(idx, 1);
-                 removeKnownHandCard(s, 'player', putBack.id);
+                 const [putBack] = s[pendingPlayer].hand.splice(idx, 1);
+                 removeKnownHandCard(s, pendingPlayer, putBack.id);
                  s.deck.push(putBack);
                  putBackCards.push(putBack);
                }
            });
-           clearKnownTop(s, 'ai');
-           forgetPrivateHandInfoFromOpponent(s, 'player');
-           setKnownTop(s, 'player', [...putBackCards].reverse());
-           logAction(`You put cards on top.`);
+           clearKnownTop(s, getOpponent(pendingPlayer));
+           forgetPrivateHandInfoFromOpponent(s, pendingPlayer);
+           setKnownTop(s, pendingPlayer, [...putBackCards].reverse());
+           logAction(`${getSeatLabel(pendingPlayer)} put cards on top.`);
        } else if (s.pendingAction.type === 'DISCARD') {
            s.pendingAction.selected.forEach(cardId => {
-               const idx = s.player.hand.findIndex(c => c.id === cardId);
+               const idx = s[pendingPlayer].hand.findIndex(c => c.id === cardId);
                if(idx > -1) {
-                 const [discarded] = s.player.hand.splice(idx, 1);
-                 removeKnownHandCard(s, 'player', discarded.id);
+                 const [discarded] = s[pendingPlayer].hand.splice(idx, 1);
+                 removeKnownHandCard(s, pendingPlayer, discarded.id);
                  s.graveyard.push(discarded);
                }
            });
-           logAction(`You discarded a card.`);
+           logAction(`${getSeatLabel(pendingPlayer)} discarded a card.`);
        } else if (s.pendingAction.type === 'PREDICT') {
            if(s.deck.length) {
                const milled = s.deck.pop();
                consumeTopKnowledgeCard(s, milled);
                s.graveyard.push(milled);
                logAction(`Predict milled: ${milled.name}.`);
-               if(milled.name === action.guess) { drawCards(s, 'player', 2); } 
-               else { drawCards(s, 'player', 1); }
+               if(milled.name === action.guess) { drawCards(s, pendingPlayer, 2); } 
+               else { drawCards(s, pendingPlayer, 1); }
            }
        } else if (s.pendingAction.type === 'TELLING_TIME') {
            const handCard = s.pendingAction.cards.find(c => c.id === s.pendingAction.hand);
@@ -3621,37 +3680,47 @@ export const createGameReducer = (effects = defaultEffects) => {
            const bottomCard = s.pendingAction.cards.find(c => c.id !== s.pendingAction.hand && c.id !== s.pendingAction.top);
            if(bottomCard) s.deck.unshift(bottomCard);
            if(topCard) s.deck.push(topCard);
-           if(handCard) { handCard.owner = 'player'; s.player.hand.push(handCard); }
-           clearKnownTop(s, 'ai');
-           setKnownTop(s, 'player', topCard ? [topCard] : []);
-           logAction(`You resolved Telling Time.`);
+           if(handCard) { handCard.owner = pendingPlayer; s[pendingPlayer].hand.push(handCard); }
+           clearKnownTop(s, getOpponent(pendingPlayer));
+           setKnownTop(s, pendingPlayer, topCard ? [topCard] : []);
+           logAction(`${getSeatLabel(pendingPlayer)} resolved Telling Time.`);
        } else if (s.pendingAction.type === 'HALIMAR_DEPTHS') {
            const reversed = [...s.pendingAction.cards].reverse();
            reversed.forEach(c => s.deck.push(c));
-           clearKnownTop(s, 'ai');
-           setKnownTop(s, 'player', s.pendingAction.cards);
-           logAction(`You reordered the top of your library.`);
+           clearKnownTop(s, getOpponent(pendingPlayer));
+           setKnownTop(s, pendingPlayer, s.pendingAction.cards);
+           logAction(`${getSeatLabel(pendingPlayer)} reordered the top of the library.`);
        } else if (s.pendingAction.type === 'MULLIGAN_BOTTOM') {
            s.pendingAction.selected.forEach(cardId => {
-               const idx = s.player.hand.findIndex(c => c.id === cardId);
+               const idx = s[pendingPlayer].hand.findIndex(c => c.id === cardId);
                if(idx > -1) {
-                 const [bottomed] = s.player.hand.splice(idx, 1);
-                 removeKnownHandCard(s, 'player', bottomed.id);
+                 const [bottomed] = s[pendingPlayer].hand.splice(idx, 1);
+                 removeKnownHandCard(s, pendingPlayer, bottomed.id);
                  s.deck.unshift(bottomed);
                }
            });
-           logAction(`You put ${s.pendingAction.count} card(s) on the bottom.`);
-           s.phase = 'upkeep';
+           logAction(`${getSeatLabel(pendingPlayer)} put ${s.pendingAction.count} card(s) on the bottom.`);
+           if (isPeerGame(s)) {
+             markPeerSeatKept(s, pendingPlayer);
+             if (haveBothPeerSeatsKept(s)) {
+               s.phase = 'upkeep';
+               s.priority = 'player';
+             } else {
+               s.priority = getOpponent(pendingPlayer);
+             }
+           } else {
+             s.phase = 'upkeep';
+           }
          } else if (s.pendingAction.type === 'DISCARD_CLEANUP') {
             s.pendingAction.selected.forEach(cardId => {
-                const idx = s.player.hand.findIndex(c => c.id === cardId);
+                const idx = s[pendingPlayer].hand.findIndex(c => c.id === cardId);
                 if(idx > -1) {
-                  const [discarded] = s.player.hand.splice(idx, 1);
-                  removeKnownHandCard(s, 'player', discarded.id);
+                  const [discarded] = s[pendingPlayer].hand.splice(idx, 1);
+                  removeKnownHandCard(s, pendingPlayer, discarded.id);
                   s.graveyard.push(discarded);
                 }
             });
-            logAction(`You discarded down to 7 cards.`);
+            logAction(`${getSeatLabel(pendingPlayer)} discarded down to 7 cards.`);
             s.pendingAction = null;
             return reducer(s, { type: 'NEXT_TURN' });
          } else if (s.pendingAction.type === 'ACTIVATE_LAND') {
@@ -3668,13 +3737,18 @@ export const createGameReducer = (effects = defaultEffects) => {
                    const [spell] = s.graveyard.splice(targetIdx, 1);
                    s.deck.push(spell);
                    prependKnownTopCard(s, 'all', spell);
-                   logAction(`You put ${spell.name} on top of your library with Mystic Sanctuary.`);
+                   logAction(`${getSeatLabel(pendingPlayer)} put ${spell.name} on top of the library with Mystic Sanctuary.`);
                }
            } else {
-               logAction(`You chose not to use Mystic Sanctuary's effect.`);
+               logAction(`${getSeatLabel(pendingPlayer)} chose not to use Mystic Sanctuary's effect.`);
            }
        }
        s.pendingAction = null;
+       if (s.phase === 'mulligan') {
+         s.stackResolving = false;
+         s.consecutivePasses = 0;
+         return s;
+       }
        s = checkStateBasedActions(s);
        s.stackResolving = false;
        s.priority = s.turn;
@@ -3745,13 +3819,13 @@ export const createGameReducer = (effects = defaultEffects) => {
          s.priority = s.turn;
       } else if (s.phase === 'cleanup') {
          if (s[s.turn].hand.length > 7) {
-              if (s.turn === 'player') {
-                  s.pendingAction = { type: 'DISCARD_CLEANUP', count: s.player.hand.length - 7, selected: [] };
-                  s.priority = 'player';
+              if (isHumanControlledSeat(s, s.turn)) {
+                  s.pendingAction = { type: 'DISCARD_CLEANUP', player: s.turn, count: s[s.turn].hand.length - 7, selected: [] };
+                  s.priority = s.turn;
                   if (!action.silentPhaseSound) effects.playPhase(s.phase);
                   return s;
               } else {
-                  while(s.ai.hand.length > 7) s.graveyard.push(s.ai.hand.shift());
+                  while(s[s.turn].hand.length > 7) s.graveyard.push(s[s.turn].hand.shift());
               }
           }
           return reducer(s, { type: 'NEXT_TURN', silentPhaseSound: true });

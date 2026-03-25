@@ -1,8 +1,10 @@
 ﻿import React, { useState, useEffect, useRef, useReducer } from 'react';
-import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeft, ArrowLeftRight, Target, Droplet, Shield, CloudRain, LogOut } from 'lucide-react';
+import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeft, ArrowLeftRight, Target, Droplet, Shield, CloudRain, LogOut, Users, Share2, Copy, Wifi, WifiOff, RefreshCw, Link as LinkIcon } from 'lucide-react';
+import { Peer } from 'peerjs';
 import $ from 'jquery';
 import 'jquery.ripples';
 import { AI_CHARACTERS, AI_DIFFICULTIES, AI_DIFFICULTY_LABELS, AI_SPEED, CARDS, DANDAN_NAME, DEFAULT_AI_CHARACTER_ID, FULL_DECKLIST, LAND_TYPE_CHOICES, PREDICT_OPTIONS, SHARED_DECK_SIZE, canDandanAttackDefender, checkHasActions, chooseAiAction, controlsIsland, createGameReducer, getAiCharacter, getAiPendingActions, getAiPolicyForActor, getAvailableMana, getManaPool, initialState, isActivatable, isCastable, isCyclable, isValidTarget } from './src/game/engine';
+import { buildPeerGuestViewState, mapGuestActionToCanonical } from './src/game/peerView';
 import archivistPortrait from './img/Archivist.png';
 import cartographerPortrait from './img/Cartographer.png';
 import eelPortrait from './img/Eel.png';
@@ -459,6 +461,10 @@ const ADVENTURE_FIXED_DIFFICULTY = 'hard';
 const ADVENTURE_BOSS_ID = ADVENTURE_ROUTE[ADVENTURE_ROUTE.length - 1];
 const RIVAL_PROGRESS_STORAGE_KEY = 'forgetful-fish-rival-progress-v1';
 const CURRENT_GAME_STORAGE_KEY = 'forgetful-fish-current-game-v1';
+const PEER_SESSION_STORAGE_KEY = 'forgetful-fish-peer-session-v1';
+const PEER_PROTOCOL_VERSION = 1;
+const PEER_RECONNECT_DELAY_MS = 1600;
+const PEER_DISCONNECT_GRACE_MS = 12000;
 const LANDING_BACKGROUNDS = [wall1Background, wall2Background, wall3Background, wall4Background];
 const MENU_PRELOAD_URLS = Array.from(new Set([
   ...Object.values(DIFFICULTY_ART),
@@ -473,6 +479,136 @@ const APP_PRELOAD_URLS = Array.from(new Set([
   ...CARD_PRELOAD_URLS
 ]));
 const LANDING_BACKGROUND_STORAGE_KEY = 'forgetful-fish-landing-bg-v1';
+const PEER_GAME_ACTIONS = new Set([
+  'ACTIVATE_LAND_NOW',
+  'CANCEL_PENDING_ACTION',
+  'CANCEL_TARGETING',
+  'CAST_SPELL',
+  'CAST_WITH_TARGET',
+  'CYCLE_CARD',
+  'KEEP_HAND',
+  'MULLIGAN',
+  'PASS_PRIORITY',
+  'PLAY_LAND',
+  'PROMPT_ACTIVATE_LAND',
+  'PROMPT_HAND_LAND_ACTION',
+  'REORDER_HALIMAR',
+  'SUBMIT_PENDING_ACTION',
+  'SURRENDER',
+  'TOGGLE_ATTACK',
+  'TOGGLE_BLOCK',
+  'TOGGLE_PENDING_SELECT',
+  'UPDATE_TELLING_TIME'
+]);
+const generatePeerToken = (prefix = 'ff') => {
+  if (typeof crypto?.randomUUID === 'function') return `${prefix}-${crypto.randomUUID()}`;
+  const values = new Uint32Array(4);
+  crypto.getRandomValues(values);
+  return `${prefix}-${Array.from(values, value => value.toString(36)).join('')}`;
+};
+const buildPeerSharePayload = (roomId, token, inviteUrl) => ({
+  title: 'Forgetful Fish',
+  text: `Join my Forgetful Fish friend match.\nRoom code: ${roomId}\nSecurity key: ${token}`,
+  url: inviteUrl
+});
+const buildPeerInviteUrl = (roomId, token) => {
+  if (typeof window === 'undefined') return '';
+  const inviteUrl = new URL(window.location.href);
+  inviteUrl.searchParams.set('peerRoom', roomId);
+  inviteUrl.searchParams.set('peerToken', token);
+  inviteUrl.searchParams.set('peerMode', 'join');
+  return inviteUrl.toString();
+};
+const readPeerInviteParams = () => {
+  if (typeof window === 'undefined') return { roomId: '', token: '', mode: '' };
+  const url = new URL(window.location.href);
+  return {
+    roomId: url.searchParams.get('peerRoom') || '',
+    token: url.searchParams.get('peerToken') || '',
+    mode: url.searchParams.get('peerMode') || ''
+  };
+};
+const getPeerClientOptions = () => {
+  const options = {
+    debug: import.meta.env.DEV ? 1 : 0
+  };
+  const host = import.meta.env.VITE_PEER_HOST;
+  const portValue = import.meta.env.VITE_PEER_PORT;
+  const path = import.meta.env.VITE_PEER_PATH;
+  const secureValue = import.meta.env.VITE_PEER_SECURE;
+  const iceServersValue = import.meta.env.VITE_PEER_ICE_SERVERS_JSON;
+
+  if (host) {
+    options.host = host;
+    if (portValue) options.port = Number(portValue);
+    if (path) options.path = path;
+    options.secure = secureValue !== 'false';
+  }
+
+  if (iceServersValue) {
+    try {
+      const parsed = JSON.parse(iceServersValue);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        options.config = { iceServers: parsed };
+      }
+    } catch (_error) {}
+  }
+
+  return options;
+};
+const loadPeerSessionDraft = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(PEER_SESSION_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_error) {
+    return null;
+  }
+};
+const savePeerSessionDraft = (draft) => {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!draft) {
+      window.sessionStorage.removeItem(PEER_SESSION_STORAGE_KEY);
+      return;
+    }
+    window.sessionStorage.setItem(PEER_SESSION_STORAGE_KEY, JSON.stringify(draft));
+  } catch (_error) {}
+};
+const getPeerGuestActionSeat = (state, action) => {
+  switch (action.type) {
+    case 'ACTIVATE_LAND_NOW':
+    case 'CAST_SPELL':
+    case 'CYCLE_CARD':
+    case 'PASS_PRIORITY':
+    case 'PLAY_LAND':
+    case 'PROMPT_ACTIVATE_LAND':
+    case 'PROMPT_HAND_LAND_ACTION':
+    case 'SURRENDER':
+    case 'TOGGLE_ATTACK':
+    case 'TOGGLE_BLOCK':
+      return action.player || null;
+    case 'KEEP_HAND':
+    case 'MULLIGAN':
+      return state.phase === 'mulligan' ? state.priority : null;
+    case 'CAST_WITH_TARGET':
+    case 'CANCEL_TARGETING':
+      return state.pendingTargetSelection?.player || null;
+    case 'CANCEL_PENDING_ACTION':
+    case 'REORDER_HALIMAR':
+    case 'SUBMIT_PENDING_ACTION':
+    case 'TOGGLE_PENDING_SELECT':
+    case 'UPDATE_TELLING_TIME':
+      return state.pendingAction?.player || null;
+    default:
+      return null;
+  }
+};
+const canApplyGuestPeerAction = (state, action) => {
+  if (!action || !PEER_GAME_ACTIONS.has(action.type)) return false;
+  if (!state?.started || state.gameMode !== 'peer' || state.winner) return false;
+  return getPeerGuestActionSeat(state, action) === 'ai';
+};
 const clampAdventureProgress = (value) => Math.max(0, Math.min(Number.isFinite(value) ? value : 0, ADVENTURE_ROUTE.length));
 const getRandomLandingBackground = (exclude = null) => {
   const options = exclude ? LANDING_BACKGROUNDS.filter(background => background !== exclude) : LANDING_BACKGROUNDS;
@@ -1117,7 +1253,7 @@ const HomeActionButton = ({ label, onClick, className = '', labelClassName = '' 
   </button>
 );
 
-const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onContinue, canContinue, onSettings }) => {
+const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onFriends, onContinue, canContinue, onSettings }) => {
   if (variantId === 'duel') {
     return (
       <div className="w-full max-w-4xl mx-auto grid gap-3">
@@ -1136,6 +1272,12 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onContinue, canCon
               className="min-h-[118px] rounded-[1.8rem] border border-slate-200/40 bg-white/72 px-5 py-5 text-left shadow-[0_20px_44px_rgba(15,23,42,0.18)] backdrop-blur-[2px]"
               labelClassName="text-2xl sm:text-3xl font-semibold tracking-[-0.03em] text-slate-950"
               indicatorClassName="border-rose-300/50 bg-rose-50/80 text-rose-700"
+            />
+            <HomeActionButton
+              label="Play With Friends"
+              onClick={onFriends}
+              className="min-h-[96px] rounded-[1.8rem] border border-sky-200/45 bg-sky-50/78 px-5 py-5 text-left shadow-[0_20px_44px_rgba(15,23,42,0.16)] backdrop-blur-[2px]"
+              labelClassName="text-xl sm:text-[2rem] font-semibold tracking-[-0.03em] text-slate-950"
             />
             {canContinue && (
               <HomeActionButton
@@ -1174,6 +1316,12 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onContinue, canCon
           className="rounded-[1.55rem] border border-slate-300/70 bg-slate-50/88 px-5 py-5 text-left shadow-[0_18px_38px_rgba(15,23,42,0.2)] backdrop-blur-[2px]"
           labelClassName="text-2xl sm:text-[2rem] font-semibold tracking-[-0.03em] text-slate-950"
           indicatorClassName="border-rose-300/60 bg-rose-50 text-rose-700"
+        />
+        <HomeActionButton
+          label="Play With Friends"
+          onClick={onFriends}
+          className="rounded-[1.55rem] border border-sky-300/70 bg-sky-50/88 px-5 py-5 text-left shadow-[0_18px_38px_rgba(15,23,42,0.18)] backdrop-blur-[2px]"
+          labelClassName="text-2xl sm:text-[2rem] font-semibold tracking-[-0.03em] text-slate-950"
         />
         {canContinue && (
           <HomeActionButton
@@ -1215,6 +1363,12 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onContinue, canCon
             labelClassName="text-2xl sm:text-[2.2rem] font-semibold tracking-[-0.03em] text-slate-950"
             indicatorClassName="border-rose-300/55 bg-rose-50/90 text-rose-700"
           />
+          <HomeActionButton
+            label="Play With Friends"
+            onClick={onFriends}
+            className="rounded-[1.9rem] border border-sky-200/50 bg-sky-50/76 px-6 py-5 text-left shadow-[0_18px_36px_rgba(15,23,42,0.16)] backdrop-blur-[2px] sm:ml-10"
+            labelClassName="text-2xl sm:text-[2.2rem] font-semibold tracking-[-0.03em] text-slate-950"
+          />
           {canContinue && (
             <HomeActionButton
               label="Continue"
@@ -1252,6 +1406,12 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onContinue, canCon
           labelClassName="text-3xl sm:text-[3rem] font-semibold tracking-[-0.04em] text-slate-950"
           indicatorClassName="border-rose-300/60 bg-rose-50/95 text-rose-700"
         />
+        <HomeActionButton
+          label="Play With Friends"
+          onClick={onFriends}
+          className="rounded-[2rem] border border-sky-200/48 bg-sky-50/78 px-6 py-6 text-left shadow-[0_20px_44px_rgba(15,23,42,0.16)] backdrop-blur-[2px]"
+          labelClassName="text-3xl sm:text-[3rem] font-semibold tracking-[-0.04em] text-slate-950"
+        />
         {canContinue && (
           <HomeActionButton
             label="Continue"
@@ -1283,6 +1443,12 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onContinue, canCon
         label="Quick Game"
         onClick={onQuickGame}
         className="w-full max-w-[15.75rem] min-h-[56px] rounded-full bg-slate-800/44 p-0 shadow-[0_18px_36px_rgba(15,23,42,0.24)] hover:bg-slate-800/54"
+        labelClassName="text-[1.2rem] sm:text-[1.32rem] tracking-[0.02em] text-white"
+      />
+      <HomeActionButton
+        label="Play With Friends"
+        onClick={onFriends}
+        className="w-full max-w-[15.75rem] min-h-[56px] rounded-full bg-sky-900/40 p-0 shadow-[0_18px_36px_rgba(15,23,42,0.24)] hover:bg-sky-900/52"
         labelClassName="text-[1.2rem] sm:text-[1.32rem] tracking-[0.02em] text-white"
       />
       {canContinue && (
@@ -1510,6 +1676,176 @@ const QuickGameDialog = ({ selectedDifficulty, onClose, onStart }) => (
   </div>
 );
 
+const PEER_STATUS_LABELS = {
+  idle: 'Ready',
+  creating: 'Creating Invite',
+  waiting: 'Waiting For Friend',
+  connecting: 'Connecting',
+  connected: 'Connected',
+  reconnecting: 'Reconnecting',
+  disconnected: 'Disconnected',
+  error: 'Connection Error'
+};
+
+const PlayWithFriendsDialog = ({
+  mode,
+  role,
+  status,
+  roomId,
+  token,
+  inviteUrl,
+  joinRoomId,
+  joinToken,
+  error,
+  note,
+  canShare,
+  onClose,
+  onSelectMode,
+  onCreateInvite,
+  onShareInvite,
+  onCopyInvite,
+  onJoinRoomIdChange,
+  onJoinTokenChange,
+  onConnect,
+  onDisconnect,
+  onRetry
+}) => {
+  const isBusy = ['creating', 'connecting', 'reconnecting'].includes(status);
+  const isHost = mode === 'host';
+  const hasInvite = Boolean(inviteUrl);
+  const statusLabel = PEER_STATUS_LABELS[status] || 'Ready';
+
+  return (
+    <div onClick={onClose} className="absolute inset-0 z-30 bg-black/82 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
+      <div onClick={(event) => event.stopPropagation()} className="w-full max-w-xl rounded-[1.9rem] border border-slate-800 bg-slate-950 p-5 sm:p-6 text-left my-auto shadow-[0_30px_80px_rgba(0,0,0,0.5)]">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-cyan-200">
+              <Users size={18} />
+              <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white">Play With Friends</h2>
+            </div>
+            <p className="mt-2 text-sm text-slate-400">Create a secure invite link, then reconnect automatically if the signal drops.</p>
+          </div>
+          <button onClick={onClose} className="w-10 h-10 rounded-2xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all flex items-center justify-center">
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="mt-5 grid grid-cols-2 gap-2 rounded-[1.25rem] border border-white/10 bg-white/[0.04] p-2">
+          <button
+            onClick={() => onSelectMode('host')}
+            className={`rounded-[1rem] px-3 py-3 text-sm font-black uppercase tracking-[0.14em] transition-all ${isHost ? 'bg-cyan-300 text-slate-950' : 'bg-slate-950/72 text-slate-300 hover:bg-slate-900'}`}
+          >
+            Host
+          </button>
+          <button
+            onClick={() => onSelectMode('join')}
+            className={`rounded-[1rem] px-3 py-3 text-sm font-black uppercase tracking-[0.14em] transition-all ${!isHost ? 'bg-cyan-300 text-slate-950' : 'bg-slate-950/72 text-slate-300 hover:bg-slate-900'}`}
+          >
+            Join
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-[1.4rem] border border-white/10 bg-white/[0.045] px-4 py-4">
+          <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-[0.16em] text-slate-300">
+            {status === 'connected' ? <Wifi size={15} /> : <WifiOff size={15} />}
+            <span>{statusLabel}</span>
+          </div>
+          {note && <p className="mt-2 text-sm leading-5 text-slate-400">{note}</p>}
+          {error && <p className="mt-2 text-sm leading-5 text-rose-300">{error}</p>}
+        </div>
+
+        {isHost ? (
+          <div className="mt-4 grid gap-3">
+            <div className="rounded-[1.35rem] border border-white/10 bg-slate-900/78 px-4 py-4">
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Invite Code</div>
+              <div className="mt-2 break-all font-mono text-sm text-cyan-100">{roomId || 'Not created yet'}</div>
+            </div>
+            <div className="rounded-[1.35rem] border border-white/10 bg-slate-900/78 px-4 py-4">
+              <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Security Key</div>
+              <div className="mt-2 break-all font-mono text-sm text-cyan-100">{token || 'Generated with the invite'}</div>
+            </div>
+            <div className="rounded-[1.35rem] border border-white/10 bg-slate-900/78 px-4 py-4">
+              <div className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">
+                <LinkIcon size={13} />
+                <span>Invite Link</span>
+              </div>
+              <div className="mt-2 break-all text-sm text-slate-300">{inviteUrl || 'Create an invite to get the share link.'}</div>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                onClick={hasInvite ? onShareInvite : onCreateInvite}
+                disabled={isBusy}
+                className="w-full min-h-[52px] rounded-2xl bg-[#38bdf8] hover:bg-[#22c7ff] disabled:bg-slate-700 disabled:text-slate-400 text-slate-950 font-bold tracking-[0.04em] uppercase transition-colors flex items-center justify-center gap-2"
+              >
+                <Share2 size={16} />
+                {hasInvite ? 'Share Invite' : 'Create Invite'}
+              </button>
+              <button
+                onClick={onCopyInvite}
+                disabled={!hasInvite}
+                className="w-full min-h-[52px] rounded-2xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-900 disabled:text-slate-600 text-slate-100 font-bold tracking-[0.04em] uppercase transition-colors border border-slate-700 flex items-center justify-center gap-2"
+              >
+                <Copy size={16} />
+                Copy Link
+              </button>
+            </div>
+            {role === 'host' && (
+              <button
+                onClick={onDisconnect}
+                className="w-full min-h-[50px] rounded-2xl bg-slate-900/84 hover:bg-slate-800 text-slate-100 font-bold tracking-[0.04em] uppercase transition-colors border border-slate-700"
+              >
+                Cancel Session
+              </button>
+            )}
+            {!canShare && hasInvite && (
+              <p className="text-xs leading-5 text-slate-500">Native share is not available on this device, so the link can be copied manually.</p>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-3">
+            <label className="grid gap-2">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Invite Code</span>
+              <input
+                value={joinRoomId}
+                onChange={(event) => onJoinRoomIdChange(event.target.value)}
+                placeholder="Paste the host code"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-900/88 px-4 py-3 text-slate-100 outline-none focus:border-cyan-300"
+              />
+            </label>
+            <label className="grid gap-2">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Security Key</span>
+              <input
+                value={joinToken}
+                onChange={(event) => onJoinTokenChange(event.target.value)}
+                placeholder="Paste the shared key"
+                className="w-full rounded-2xl border border-slate-700 bg-slate-900/88 px-4 py-3 text-slate-100 outline-none focus:border-cyan-300"
+              />
+            </label>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button
+                onClick={onConnect}
+                disabled={isBusy || !joinRoomId.trim() || !joinToken.trim()}
+                className="w-full min-h-[52px] rounded-2xl bg-[#38bdf8] hover:bg-[#22c7ff] disabled:bg-slate-700 disabled:text-slate-400 text-slate-950 font-bold tracking-[0.04em] uppercase transition-colors flex items-center justify-center gap-2"
+              >
+                {status === 'reconnecting' ? <RefreshCw size={16} className="animate-spin" /> : <Users size={16} />}
+                Connect
+              </button>
+              <button
+                onClick={status === 'error' ? onRetry : onDisconnect}
+                disabled={!role && status === 'idle'}
+                className="w-full min-h-[52px] rounded-2xl bg-slate-900 hover:bg-slate-800 disabled:bg-slate-900 disabled:text-slate-600 text-slate-100 font-bold tracking-[0.04em] uppercase transition-colors border border-slate-700"
+              >
+                {status === 'error' ? 'Retry' : 'Disconnect'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const HomeVariantBar = () => null;
 
 const LandingScreen = ({
@@ -1529,11 +1865,34 @@ const LandingScreen = ({
   onOpenLibrary,
   onCloseLibrary,
   showQuickGameDialog,
+  showFriendsDialog,
   selectedDifficulty,
   menuAssetsReady,
   onQuickGameOpen,
   onQuickGameClose,
   onQuickGameStart,
+  onFriendsOpen,
+  onFriendsClose,
+  friendDialogMode,
+  friendRole,
+  friendStatus,
+  friendRoomId,
+  friendToken,
+  friendInviteUrl,
+  friendJoinRoomId,
+  friendJoinToken,
+  friendError,
+  friendNote,
+  canShareFriendInvite,
+  onSelectFriendMode,
+  onCreateFriendInvite,
+  onShareFriendInvite,
+  onCopyFriendInvite,
+  onFriendJoinRoomIdChange,
+  onFriendJoinTokenChange,
+  onConnectFriendInvite,
+  onDisconnectFriendInvite,
+  onRetryFriendInvite,
   canContinueGame,
   onContinueGame,
   onAdventureOpen,
@@ -1726,6 +2085,7 @@ const LandingScreen = ({
                     variantId={homeVariant}
                     onAdventure={onAdventureOpen}
                     onQuickGame={onQuickGameOpen}
+                    onFriends={onFriendsOpen}
                     onContinue={onContinueGame}
                     canContinue={canContinueGame}
                     onSettings={onOpenSettings}
@@ -1868,13 +2228,42 @@ const LandingScreen = ({
       )}
 
       {showQuickGameDialog && <QuickGameDialog selectedDifficulty={selectedDifficulty} onClose={onQuickGameClose} onStart={onQuickGameStart} />}
+      {showFriendsDialog && (
+        <PlayWithFriendsDialog
+          mode={friendDialogMode}
+          role={friendRole}
+          status={friendStatus}
+          roomId={friendRoomId}
+          token={friendToken}
+          inviteUrl={friendInviteUrl}
+          joinRoomId={friendJoinRoomId}
+          joinToken={friendJoinToken}
+          error={friendError}
+          note={friendNote}
+          canShare={canShareFriendInvite}
+          onClose={onFriendsClose}
+          onSelectMode={onSelectFriendMode}
+          onCreateInvite={onCreateFriendInvite}
+          onShareInvite={onShareFriendInvite}
+          onCopyInvite={onCopyFriendInvite}
+          onJoinRoomIdChange={onFriendJoinRoomIdChange}
+          onJoinTokenChange={onFriendJoinTokenChange}
+          onConnect={onConnectFriendInvite}
+          onDisconnect={onDisconnectFriendInvite}
+          onRetry={onRetryFriendInvite}
+        />
+      )}
     </div>
   );
 };
 
 // --- MAIN APP COMPONENT ---
 export default function App() {
-  const [state, dispatch] = useReducer(gameReducer, initialState);
+  const inviteParams = readPeerInviteParams();
+  const peerSessionDraft = loadPeerSessionDraft();
+  const restoredJoinRoomId = inviteParams.roomId || (peerSessionDraft?.role === 'guest' ? peerSessionDraft.roomId || '' : '');
+  const restoredJoinToken = inviteParams.token || (peerSessionDraft?.role === 'guest' ? peerSessionDraft.token || '' : '');
+  const [state, rawDispatch] = useReducer(gameReducer, initialState);
   const [menuMode, setMenuMode] = useState('adventure');
   const [menuScreen, setMenuScreen] = useState('home');
   const [landingBackground, setLandingBackground] = useState(() => loadLandingBackground());
@@ -1898,13 +2287,70 @@ export default function App() {
   const [draggedIdx, setDraggedIdx] = useState(null);
   const [zoomedCard, setZoomedCard] = useState(null); 
   const [viewingZone, setViewingZone] = useState(null); 
+  const [peerUi, setPeerUi] = useState(() => ({
+    open: Boolean(inviteParams.roomId && inviteParams.token),
+    mode: inviteParams.roomId && inviteParams.token ? 'join' : (peerSessionDraft?.lastMode === 'join' ? 'join' : 'host'),
+    role: null,
+    status: 'idle',
+    roomId: '',
+    token: '',
+    inviteUrl: '',
+    joinRoomId: restoredJoinRoomId,
+    joinToken: restoredJoinToken,
+    error: '',
+    note: inviteParams.roomId && inviteParams.token
+      ? 'Invite link detected. Connect to begin.'
+      : restoredJoinRoomId && restoredJoinToken
+        ? 'Last friend invite restored. Reconnect when ready.'
+        : ''
+  }));
   const hadPersistableGameRef = useRef(false);
+  const latestStateRef = useRef(state);
+  const peerRef = useRef(null);
+  const peerConnectionRef = useRef(null);
+  const peerReconnectTimerRef = useRef(null);
+  const peerDisconnectTimerRef = useRef(null);
+  const autoJoinInviteRef = useRef(Boolean(inviteParams.roomId && inviteParams.token));
+  const peerSessionRef = useRef({
+    role: null,
+    roomId: '',
+    token: '',
+    inviteUrl: '',
+    clientId: '',
+    guestClientId: '',
+    lastConnectAttemptAt: 0,
+    manualClose: false
+  });
+  const dispatch = (action) => {
+    if (peerUi.role === 'guest' && PEER_GAME_ACTIONS.has(action?.type)) {
+      const connection = peerConnectionRef.current;
+      if (!connection?.open) {
+        setPeerUi((current) => ({
+          ...current,
+          status: current.status === 'connected' ? 'reconnecting' : current.status,
+          error: 'Connection lost. Waiting to reconnect before sending actions.'
+        }));
+        return;
+      }
+      connection.send({
+        type: 'peer-action',
+        protocol: PEER_PROTOCOL_VERSION,
+        action: mapGuestActionToCanonical(action)
+      });
+      return;
+    }
+    rawDispatch(action);
+  };
+  const isPeerSessionActive = Boolean(peerUi.role);
   const isAiMirror = state.gameMode === 'ai_vs_ai';
   const isAdventureMatch = state.gameMode === 'adventure';
+  const isPeerMatch = state.gameMode === 'peer';
   const difficultySpeed = AI_SPEED[state.difficulty] || AI_SPEED.medium;
   const adventurePreviewIndex = Math.min(adventureWinsCount, ADVENTURE_ROUTE.length - 1);
   const adventurePreviewCharacter = getAiCharacter(ADVENTURE_ROUTE[adventurePreviewIndex]) || AI_CHARACTERS[0];
   const selectedOpponent = getAiCharacter(selectedOpponentCharacter) || AI_CHARACTERS[0];
+  const currentMulliganCount = isPeerMatch ? (state.peerMulligan?.counts?.player || state.mulliganCount || 0) : (state.mulliganCount || 0);
+  const canShareFriendInvite = typeof navigator !== 'undefined' && typeof navigator.share === 'function';
   const canPlayerAttemptAttackSelection = !isAiMirror &&
     state.turn === 'player' &&
     state.phase === 'declare_attackers' &&
@@ -1916,13 +2362,17 @@ export default function App() {
     dandanAttackBlockedDialog ||
     (state.pendingAction && peekablePendingActionTypes.includes(state.pendingAction.type))
   );
-  const currentOpponentCharacter = state.started
+  const currentOpponentCharacter = isPeerMatch
+    ? null
+    : state.started
     ? getAiCharacter(state.aiCharacterId)
     : menuScreen === 'adventure'
       ? adventurePreviewCharacter
       : null;
   const currentPlayerAiCharacter = state.started ? getAiCharacter(state.playerAiCharacterId || null) : null;
-  const opponentAvatarSrc = currentOpponentCharacter
+  const opponentAvatarSrc = isPeerMatch
+    ? CARDS.DANDAN.image
+    : currentOpponentCharacter
     ? getCharacterPortrait(currentOpponentCharacter.id, state.difficulty || selectedDifficulty)
     : (DIFFICULTY_ART[state.difficulty || selectedDifficulty] || DIFFICULTY_ART.medium);
   const isAdventureComplete = adventureWinsCount >= ADVENTURE_ROUTE.length;
@@ -1931,6 +2381,9 @@ export default function App() {
   const adventureProgressRatio = Math.min(adventureWinsCount / ADVENTURE_ROUTE.length, 1);
   const adventureStageNumber = Math.min(adventureWinsCount + 1, ADVENTURE_ROUTE.length);
   const availableAdventureStages = isAdventureComplete ? ADVENTURE_ROUTE.length : Math.min(adventureWinsCount + 1, ADVENTURE_ROUTE.length);
+  useEffect(() => {
+    latestStateRef.current = state;
+  }, [state]);
   useEffect(() => { AudioEngine.muted = muted; }, [muted]);
   useEffect(() => { saveRivalProgress(adventureWinsCount); }, [adventureWinsCount]);
   useEffect(() => {
@@ -1946,7 +2399,7 @@ export default function App() {
     ));
   }, [state.stack]);
   useEffect(() => {
-    const hasPersistableGame = state.started && !state.winner;
+    const hasPersistableGame = state.started && !state.winner && state.gameMode !== 'peer';
 
     if (hasPersistableGame) {
       saveCurrentGameSnapshot(state);
@@ -1961,6 +2414,27 @@ export default function App() {
   useEffect(() => {
     preloadImageUrls(APP_PRELOAD_URLS);
   }, []);
+  useEffect(() => {
+    if (peerUi.role !== 'host' || state.gameMode !== 'peer') return;
+    pushPeerStateSync(state);
+  }, [state, peerUi.role]);
+  useEffect(() => {
+    if (!autoJoinInviteRef.current) return;
+    if (!peerUi.open || peerUi.mode !== 'join' || peerUi.role || peerUi.status !== 'idle') return;
+    if (!peerUi.joinRoomId || !peerUi.joinToken) return;
+    autoJoinInviteRef.current = false;
+    const timer = window.setTimeout(() => {
+      startGuestConnection();
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [peerUi.open, peerUi.mode, peerUi.role, peerUi.status, peerUi.joinRoomId, peerUi.joinToken]);
+  useEffect(() => () => {
+    peerSessionRef.current.manualClose = true;
+    if (peerReconnectTimerRef.current) window.clearTimeout(peerReconnectTimerRef.current);
+    if (peerDisconnectTimerRef.current) window.clearTimeout(peerDisconnectTimerRef.current);
+    try { peerConnectionRef.current?.close(); } catch (_error) {}
+    try { peerRef.current?.destroy(); } catch (_error) {}
+  }, []);
 
   const refreshLandingBackground = () => {
     setLandingBackground((previousBackground) => {
@@ -1970,12 +2444,520 @@ export default function App() {
     });
   };
 
+  const updatePeerUi = (updates) => {
+    setPeerUi((current) => ({
+      ...current,
+      ...(typeof updates === 'function' ? updates(current) : updates)
+    }));
+  };
+
+  const clearPeerTimers = () => {
+    if (peerReconnectTimerRef.current) {
+      window.clearTimeout(peerReconnectTimerRef.current);
+      peerReconnectTimerRef.current = null;
+    }
+    if (peerDisconnectTimerRef.current) {
+      window.clearTimeout(peerDisconnectTimerRef.current);
+      peerDisconnectTimerRef.current = null;
+    }
+  };
+
+  const pushPeerStateSync = (sourceState = latestStateRef.current) => {
+    const connection = peerConnectionRef.current;
+    if (!connection?.open || sourceState.gameMode !== 'peer') return;
+    connection.send({
+      type: 'state-sync',
+      protocol: PEER_PROTOCOL_VERSION,
+      state: buildPeerGuestViewState(sourceState),
+      sentAt: Date.now()
+    });
+  };
+
+  const disconnectPeerSession = ({ notifyRemote = false, resetGame = false, keepDialog = false, note = '', preserveJoinFields = true } = {}) => {
+    peerSessionRef.current.manualClose = true;
+    clearPeerTimers();
+
+    const connection = peerConnectionRef.current;
+    if (notifyRemote && connection?.open) {
+      try {
+        connection.send({ type: 'session-ended', protocol: PEER_PROTOCOL_VERSION, reason: note || 'Host closed the room.' });
+      } catch (_error) {}
+    }
+    if (connection) {
+      try { connection.close(); } catch (_error) {}
+    }
+
+    const peer = peerRef.current;
+    if (peer) {
+      try { peer.destroy(); } catch (_error) {}
+    }
+
+    peerConnectionRef.current = null;
+    peerRef.current = null;
+    savePeerSessionDraft(null);
+
+    if (resetGame) {
+      rawDispatch({ type: 'RETURN_TO_MENU' });
+    }
+
+    updatePeerUi((current) => ({
+      open: keepDialog,
+      mode: current.mode,
+      role: null,
+      status: 'idle',
+      roomId: '',
+      token: '',
+      inviteUrl: '',
+      joinRoomId: preserveJoinFields ? current.joinRoomId : '',
+      joinToken: preserveJoinFields ? current.joinToken : '',
+      error: '',
+      note
+    }));
+    peerSessionRef.current = {
+      role: null,
+      roomId: '',
+      token: '',
+      inviteUrl: '',
+      clientId: '',
+      guestClientId: '',
+      lastConnectAttemptAt: 0,
+      manualClose: true
+    };
+  };
+
+  const connectGuestDataChannel = () => {
+    const peer = peerRef.current;
+    const { roomId, token, clientId } = peerSessionRef.current;
+    if (!peer || !roomId || !token) return;
+    if (peerConnectionRef.current?.open) return;
+
+    const connection = peer.connect(roomId, {
+      reliable: true,
+      metadata: {
+        protocol: PEER_PROTOCOL_VERSION,
+        token,
+        clientId
+      }
+    });
+
+    peerConnectionRef.current = connection;
+
+    connection.on('open', () => {
+      updatePeerUi({
+        role: 'guest',
+        status: 'connecting',
+        error: '',
+        note: 'Connected to the room. Waiting for the host to sync the match...'
+      });
+      connection.send({
+        type: 'hello',
+        protocol: PEER_PROTOCOL_VERSION,
+        token,
+        clientId
+      });
+    });
+
+    connection.on('data', (message) => {
+      if (!message || typeof message !== 'object') return;
+      if (message.protocol && message.protocol !== PEER_PROTOCOL_VERSION) {
+        updatePeerUi({
+          open: true,
+          mode: 'join',
+          role: 'guest',
+          status: 'error',
+          error: 'Invite version mismatch. Ask your friend to refresh and create a new invite.',
+          note: 'This link was created by an incompatible build.'
+        });
+        return;
+      }
+      if (message.type === 'state-sync' && message.state) {
+        rawDispatch({ type: 'HYDRATE_PEER_STATE', state: message.state });
+        updatePeerUi({
+          open: false,
+          role: 'guest',
+          status: 'connected',
+          error: '',
+          note: 'Friend match connected.'
+        });
+        savePeerSessionDraft({
+          lastMode: 'join',
+          role: 'guest',
+          roomId: peerSessionRef.current.roomId,
+          token: peerSessionRef.current.token,
+          clientId: peerSessionRef.current.clientId
+        });
+        return;
+      }
+      if (message.type === 'session-ended') {
+        disconnectPeerSession({
+          notifyRemote: false,
+          resetGame: true,
+          keepDialog: true,
+          note: message.reason || 'The host closed the room.'
+        });
+        return;
+      }
+      if (message.type === 'session-rejected') {
+        disconnectPeerSession({
+          notifyRemote: false,
+          resetGame: false,
+          keepDialog: true,
+          note: '',
+          preserveJoinFields: true
+        });
+        updatePeerUi({
+          open: true,
+          mode: 'join',
+          status: 'error',
+          error: message.reason || 'The host rejected this invite.',
+          note: 'Check the link or ask your friend to create a new invite.'
+        });
+        return;
+      }
+      if (message.type === 'peer-error') {
+        updatePeerUi({
+          status: 'error',
+          error: message.reason || 'The host rejected the last action.',
+          note: 'The match is still open.'
+        });
+      }
+    });
+
+    connection.on('close', () => {
+      if (peerSessionRef.current.manualClose) return;
+      clearPeerTimers();
+      peerConnectionRef.current = null;
+      updatePeerUi({
+        role: 'guest',
+        status: 'reconnecting',
+        error: '',
+        note: 'Connection dropped. Trying to rejoin the room...'
+      });
+      peerReconnectTimerRef.current = window.setTimeout(() => {
+        if (peerRef.current?.disconnected) {
+          try { peerRef.current.reconnect(); } catch (_error) {}
+        }
+        connectGuestDataChannel();
+      }, PEER_RECONNECT_DELAY_MS);
+    });
+
+    connection.on('error', () => {
+      if (peerSessionRef.current.manualClose) return;
+      clearPeerTimers();
+      peerConnectionRef.current = null;
+      updatePeerUi({
+        role: 'guest',
+        status: 'reconnecting',
+        error: '',
+        note: 'Signal error. Trying to reconnect...'
+      });
+      peerReconnectTimerRef.current = window.setTimeout(() => {
+        if (peerRef.current?.disconnected) {
+          try { peerRef.current.reconnect(); } catch (_error) {}
+        }
+        connectGuestDataChannel();
+      }, PEER_RECONNECT_DELAY_MS);
+    });
+  };
+
+  const startHostInvite = async ({ autoShare = true } = {}) => {
+    disconnectPeerSession({ notifyRemote: false, resetGame: false, keepDialog: false, preserveJoinFields: true });
+
+    const roomId = generatePeerToken('room');
+    const token = generatePeerToken('key');
+    const inviteUrl = buildPeerInviteUrl(roomId, token);
+
+    peerSessionRef.current = {
+      role: 'host',
+      roomId,
+      token,
+      inviteUrl,
+      clientId: roomId,
+      guestClientId: '',
+      lastConnectAttemptAt: Date.now(),
+      manualClose: false
+    };
+
+    updatePeerUi({
+      open: true,
+      mode: 'host',
+      role: 'host',
+      status: 'creating',
+      roomId,
+      token,
+      inviteUrl,
+      error: '',
+      note: 'Opening your room and preparing the share link...'
+    });
+
+    const peer = new Peer(roomId, getPeerClientOptions());
+    peerRef.current = peer;
+
+    peer.on('open', async () => {
+      updatePeerUi({
+        role: 'host',
+        status: 'waiting',
+        roomId,
+        token,
+        inviteUrl,
+        error: '',
+        note: 'Invite ready. Share the link and keep this page open.'
+      });
+      savePeerSessionDraft({ lastMode: 'host', roomId, token, inviteUrl });
+      if (autoShare && canShareFriendInvite) {
+        try {
+          await navigator.share(buildPeerSharePayload(roomId, token, inviteUrl));
+          updatePeerUi((current) => (
+            current.role === 'host' && current.roomId === roomId
+              ? { ...current, note: 'Invite shared. Waiting for your friend to connect.' }
+              : current
+          ));
+        } catch (_error) {}
+      }
+    });
+
+    peer.on('connection', (connection) => {
+      const metadataToken = connection.metadata?.token;
+      const guestClientId = connection.metadata?.clientId || '';
+      if (metadataToken !== peerSessionRef.current.token) {
+        connection.on('open', () => {
+          try {
+            connection.send({ type: 'session-rejected', protocol: PEER_PROTOCOL_VERSION, reason: 'Invalid invite key.' });
+          } catch (_error) {}
+          connection.close();
+        });
+        return;
+      }
+      if (peerSessionRef.current.guestClientId && guestClientId && peerSessionRef.current.guestClientId !== guestClientId && peerConnectionRef.current?.open) {
+        connection.on('open', () => {
+          try {
+            connection.send({ type: 'session-rejected', protocol: PEER_PROTOCOL_VERSION, reason: 'This room is already occupied.' });
+          } catch (_error) {}
+          connection.close();
+        });
+        return;
+      }
+
+      clearPeerTimers();
+      peerSessionRef.current.guestClientId = guestClientId;
+
+      if (peerConnectionRef.current && peerConnectionRef.current !== connection) {
+        try { peerConnectionRef.current.close(); } catch (_error) {}
+      }
+      peerConnectionRef.current = connection;
+
+      connection.on('open', () => {
+        updatePeerUi({
+          open: false,
+          role: 'host',
+          status: 'connected',
+          error: '',
+          note: 'Friend connected.'
+        });
+        try {
+          connection.send({ type: 'session-accepted', protocol: PEER_PROTOCOL_VERSION });
+        } catch (_error) {}
+        const currentState = latestStateRef.current;
+        if (!currentState.started || currentState.gameMode !== 'peer' || currentState.winner) {
+          rawDispatch({ type: 'START_GAME', mode: 'peer', difficulty: selectedDifficulty });
+        } else {
+          pushPeerStateSync(currentState);
+        }
+      });
+
+      connection.on('data', (message) => {
+        if (!message || typeof message !== 'object') return;
+        if (message.protocol !== PEER_PROTOCOL_VERSION) {
+          try {
+            connection.send({ type: 'session-rejected', protocol: PEER_PROTOCOL_VERSION, reason: 'Invite version mismatch.' });
+          } catch (_error) {}
+          connection.close();
+          return;
+        }
+        if (message.type === 'hello') {
+          pushPeerStateSync(latestStateRef.current);
+          return;
+        }
+        if (message.type === 'peer-action' && message.action) {
+          if (canApplyGuestPeerAction(latestStateRef.current, message.action)) {
+            rawDispatch(message.action);
+          } else {
+            try {
+              connection.send({ type: 'peer-error', protocol: PEER_PROTOCOL_VERSION, reason: 'Rejected an invalid action.' });
+            } catch (_error) {}
+          }
+        }
+      });
+
+      connection.on('close', () => {
+        if (peerSessionRef.current.manualClose) return;
+        clearPeerTimers();
+        peerConnectionRef.current = null;
+        updatePeerUi({
+          role: 'host',
+          status: 'reconnecting',
+          error: '',
+          note: 'Friend disconnected. Keeping the room alive for a reconnect...'
+        });
+        peerDisconnectTimerRef.current = window.setTimeout(() => {
+          peerSessionRef.current.guestClientId = '';
+          updatePeerUi((current) => ({
+            ...current,
+            role: 'host',
+            status: 'waiting',
+            error: '',
+            note: 'Invite is still active. Waiting for your friend to reconnect.'
+          }));
+        }, PEER_DISCONNECT_GRACE_MS);
+      });
+
+      connection.on('error', () => {
+        if (peerSessionRef.current.manualClose) return;
+        clearPeerTimers();
+        updatePeerUi({
+          role: 'host',
+          status: 'reconnecting',
+          error: '',
+          note: 'Room signal hiccup. Waiting for the guest to reconnect...'
+        });
+      });
+    });
+
+    peer.on('disconnected', () => {
+      if (peerSessionRef.current.manualClose) return;
+      updatePeerUi({
+        role: 'host',
+        status: 'reconnecting',
+        error: '',
+        note: 'Lost contact with the signaling server. Retrying...'
+      });
+      try { peer.reconnect(); } catch (_error) {}
+    });
+
+    peer.on('error', (error) => {
+      if (peerSessionRef.current.manualClose) return;
+      updatePeerUi({
+        open: true,
+        mode: 'host',
+        role: 'host',
+        status: 'error',
+        error: error?.message || 'Unable to open the friend room.',
+        note: 'Try again or check the PeerServer configuration.'
+      });
+    });
+  };
+
+  const startGuestConnection = () => {
+    const roomId = peerUi.joinRoomId.trim();
+    const token = peerUi.joinToken.trim();
+    if (!roomId || !token) {
+      updatePeerUi({
+        status: 'error',
+        error: 'Both the invite code and security key are required.',
+        note: 'Ask your friend to share the full invite again.'
+      });
+      return;
+    }
+
+    disconnectPeerSession({ notifyRemote: false, resetGame: false, keepDialog: false, preserveJoinFields: true });
+
+    const previousDraft = loadPeerSessionDraft();
+    const clientId = previousDraft?.role === 'guest' && previousDraft.roomId === roomId && previousDraft.token === token && previousDraft.clientId
+      ? previousDraft.clientId
+      : generatePeerToken('guest');
+
+    peerSessionRef.current = {
+      role: 'guest',
+      roomId,
+      token,
+      inviteUrl: buildPeerInviteUrl(roomId, token),
+      clientId,
+      guestClientId: '',
+      lastConnectAttemptAt: Date.now(),
+      manualClose: false
+    };
+
+    updatePeerUi({
+      open: true,
+      mode: 'join',
+      role: 'guest',
+      status: 'connecting',
+      roomId: '',
+      token: '',
+      inviteUrl: '',
+      error: '',
+      note: 'Contacting the host...'
+    });
+
+    const peer = new Peer(clientId, getPeerClientOptions());
+    peerRef.current = peer;
+
+    peer.on('open', () => {
+      savePeerSessionDraft({ lastMode: 'join', role: 'guest', roomId, token, clientId });
+      connectGuestDataChannel();
+    });
+
+    peer.on('disconnected', () => {
+      if (peerSessionRef.current.manualClose) return;
+      updatePeerUi({
+        role: 'guest',
+        status: 'reconnecting',
+        error: '',
+        note: 'Signal lost. Retrying the room...'
+      });
+      try { peer.reconnect(); } catch (_error) {}
+      peerReconnectTimerRef.current = window.setTimeout(() => {
+        connectGuestDataChannel();
+      }, PEER_RECONNECT_DELAY_MS);
+    });
+
+    peer.on('error', (error) => {
+      if (peerSessionRef.current.manualClose) return;
+      updatePeerUi({
+        open: true,
+        mode: 'join',
+        role: 'guest',
+        status: 'error',
+        error: error?.type === 'peer-unavailable'
+          ? 'Host not found. Make sure the host opened the room first.'
+          : (error?.message || 'Unable to join the friend room.'),
+        note: 'You can retry with the same invite.'
+      });
+    });
+  };
+
+  const shareCurrentInvite = async () => {
+    if (!peerUi.inviteUrl) return;
+    if (canShareFriendInvite) {
+      try {
+        await navigator.share(buildPeerSharePayload(peerUi.roomId, peerUi.token, peerUi.inviteUrl));
+        updatePeerUi({ note: 'Invite shared. Waiting for your friend to connect.' });
+        return;
+      } catch (_error) {}
+    }
+    if (navigator?.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(peerUi.inviteUrl);
+        updatePeerUi({ note: 'Invite link copied. Paste it into your messaging app.' });
+      } catch (_error) {}
+    }
+  };
+
+  const copyCurrentInvite = async () => {
+    if (!peerUi.inviteUrl || !navigator?.clipboard?.writeText) return;
+    try {
+      await navigator.clipboard.writeText(peerUi.inviteUrl);
+      updatePeerUi({ note: 'Invite link copied to the clipboard.' });
+    } catch (_error) {}
+  };
+
   useEffect(() => {
+    if (peerUi.role === 'guest') return;
     if (state.stackResolving && !state.pendingAction) {
       const timer = setTimeout(() => { dispatch({ type: 'RESOLVE_TOP_STACK' }); }, isAiMirror ? 20 : difficultySpeed.resolve);
       return () => clearTimeout(timer);
     }
-  }, [state.stackResolving, state.pendingAction, isAiMirror, difficultySpeed.resolve]);
+  }, [state.stackResolving, state.pendingAction, isAiMirror, difficultySpeed.resolve, peerUi.role]);
 
   useEffect(() => {
     if (isAiMirror) return;
@@ -1988,6 +2970,7 @@ export default function App() {
   }, [state.priority, state.actionCount, state.stackResolving, state.winner, state.pendingTargetSelection, state.pendingAction, state.turn, state.phase, state.stack.length, isAiMirror, dandanCastConfirm, dandanAttackBlockedDialog, canPlayerAttemptAttackSelection]);
 
   useEffect(() => {
+    if (isPeerMatch) return;
     if (state.winner || state.stackResolving) return;
 
     if (state.pendingAction && isAiMirror) {
@@ -2003,9 +2986,12 @@ export default function App() {
     
     const timer = setTimeout(() => { takeAiAction(automatedPlayer); }, delay); 
     return () => clearTimeout(timer);
-  }, [state.priority, state.actionCount, state.stackResolving, state.winner, state.turn, state.phase, state.pendingAction, isAiMirror, difficultySpeed.think, difficultySpeed.pass]);
+  }, [state.priority, state.actionCount, state.stackResolving, state.winner, state.turn, state.phase, state.pendingAction, isAiMirror, difficultySpeed.think, difficultySpeed.pass, isPeerMatch]);
 
   const startMatch = (mode, aiCharacterId, playerAiCharacterId = null, difficultyOverride = selectedDifficulty) => {
+    if (mode !== 'peer' && isPeerSessionActive) {
+      disconnectPeerSession({ notifyRemote: peerUi.role === 'host', resetGame: false, keepDialog: false, note: 'Friend match closed.' });
+    }
     setDandanCastConfirm(null);
     setDandanAttackBlockedDialog(null);
     dispatch({
@@ -2042,34 +3028,18 @@ export default function App() {
     if (state.winner === 'player') {
       setAdventureWinsCount((count) => Math.min(count + 1, ADVENTURE_ROUTE.length));
     }
-    setMenuMode('adventure');
-    setShowRivalMenu(false);
-    setMenuScreen('home');
-    refreshLandingBackground();
-    setShowQuickGameDialog(false);
-    setShowMenuSettings(false);
-    setShowExitConfirm(false);
-    setDandanCastConfirm(null);
-    setDandanAttackBlockedDialog(null);
-    setShowLog(false);
-    setZoomedCard(null);
-    setViewingZone(null);
+    if (isPeerSessionActive) {
+      disconnectPeerSession({ notifyRemote: peerUi.role === 'host', resetGame: false, keepDialog: false, note: 'Friend match closed.' });
+    }
+    resetMenuUiState();
     dispatch({ type: 'RETURN_TO_MENU' });
   };
 
   const returnToMenu = () => {
-    setMenuMode('adventure');
-    setShowRivalMenu(false);
-    setMenuScreen('home');
-    refreshLandingBackground();
-    setShowQuickGameDialog(false);
-    setShowMenuSettings(false);
-    setShowExitConfirm(false);
-    setDandanCastConfirm(null);
-    setDandanAttackBlockedDialog(null);
-    setShowLog(false);
-    setZoomedCard(null);
-    setViewingZone(null);
+    if (isPeerSessionActive) {
+      disconnectPeerSession({ notifyRemote: peerUi.role === 'host', resetGame: false, keepDialog: false, note: 'Friend match closed.' });
+    }
+    resetMenuUiState();
     dispatch({ type: 'RETURN_TO_MENU' });
   };
 
@@ -2089,6 +3059,9 @@ export default function App() {
     }
 
     AudioEngine.init();
+    if (isPeerSessionActive) {
+      disconnectPeerSession({ notifyRemote: peerUi.role === 'host', resetGame: false, keepDialog: false, note: 'Friend match closed.' });
+    }
     setShowQuickGameDialog(false);
     setShowMenuSettings(false);
     setShowRivalMenu(false);
@@ -2114,6 +3087,22 @@ export default function App() {
     const difficulty = state.difficulty || 'medium';
     const policy = getAiPolicyForActor(state, actor, difficulty);
     dispatch(chooseAiAction(state, actor, difficulty, policy));
+  };
+
+  const resetMenuUiState = () => {
+    setMenuMode('adventure');
+    setShowRivalMenu(false);
+    setMenuScreen('home');
+    refreshLandingBackground();
+    setShowQuickGameDialog(false);
+    setShowMenuSettings(false);
+    updatePeerUi((current) => ({ ...current, open: false, error: '', note: current.note }));
+    setShowExitConfirm(false);
+    setDandanCastConfirm(null);
+    setDandanAttackBlockedDialog(null);
+    setShowLog(false);
+    setZoomedCard(null);
+    setViewingZone(null);
   };
 
   const handleBattlefieldPeekStart = (event) => {
@@ -2162,11 +3151,11 @@ export default function App() {
       const canPlay = isCastable(card, state);
       const canCycle = isCyclable(card, state);
       if (card.isLand && canPlay && canCycle) {
-        dispatch({ type: 'PROMPT_HAND_LAND_ACTION', cardId: card.id });
+        dispatch({ type: 'PROMPT_HAND_LAND_ACTION', player: 'player', cardId: card.id });
         return;
       }
       if (card.isLand && canCycle) {
-        dispatch({ type: 'PROMPT_HAND_LAND_ACTION', cardId: card.id });
+        dispatch({ type: 'PROMPT_HAND_LAND_ACTION', player: 'player', cardId: card.id });
         return;
       }
       if (canPlay) {
@@ -2190,7 +3179,7 @@ export default function App() {
             dispatch({ type: 'TOGGLE_BLOCK', cardId: card.id, player: 'player' });
          }
       } else if (card.isLand && isActivatable(card, state)) {
-         dispatch({ type: 'PROMPT_ACTIVATE_LAND', cardId: card.id, cardName: card.name });
+         dispatch({ type: 'PROMPT_ACTIVATE_LAND', player: 'player', cardId: card.id, cardName: card.name });
       }
     }
   };
@@ -2271,11 +3260,46 @@ export default function App() {
         onOpenLibrary={() => setViewingZone('deck')}
         onCloseLibrary={() => setViewingZone(null)}
         showQuickGameDialog={showQuickGameDialog}
+        showFriendsDialog={peerUi.open}
         selectedDifficulty={selectedDifficulty}
         menuAssetsReady={menuAssetsReady}
         onQuickGameOpen={() => setShowQuickGameDialog(true)}
         onQuickGameClose={() => setShowQuickGameDialog(false)}
         onQuickGameStart={handleStartQuickGame}
+        onFriendsOpen={() => updatePeerUi({ open: true, mode: peerUi.joinRoomId && peerUi.joinToken ? 'join' : 'host', error: '', note: peerUi.note })}
+        onFriendsClose={() => {
+          if (peerUi.role && !state.started) {
+            disconnectPeerSession({ notifyRemote: peerUi.role === 'host', resetGame: false, keepDialog: false, note: 'Friend match closed.' });
+            return;
+          }
+          updatePeerUi({ open: false, error: '', note: peerUi.note });
+        }}
+        friendDialogMode={peerUi.mode}
+        friendRole={peerUi.role}
+        friendStatus={peerUi.status}
+        friendRoomId={peerUi.roomId}
+        friendToken={peerUi.token}
+        friendInviteUrl={peerUi.inviteUrl}
+        friendJoinRoomId={peerUi.joinRoomId}
+        friendJoinToken={peerUi.joinToken}
+        friendError={peerUi.error}
+        friendNote={peerUi.note}
+        canShareFriendInvite={canShareFriendInvite}
+        onSelectFriendMode={(mode) => updatePeerUi({ mode, error: '', note: mode === 'host' ? 'Create an invite and share it with your friend.' : peerUi.note || 'Paste the invite details to join.' })}
+        onCreateFriendInvite={() => startHostInvite({ autoShare: true })}
+        onShareFriendInvite={shareCurrentInvite}
+        onCopyFriendInvite={copyCurrentInvite}
+        onFriendJoinRoomIdChange={(value) => updatePeerUi({ joinRoomId: value, error: '' })}
+        onFriendJoinTokenChange={(value) => updatePeerUi({ joinToken: value, error: '' })}
+        onConnectFriendInvite={startGuestConnection}
+        onDisconnectFriendInvite={() => disconnectPeerSession({ notifyRemote: peerUi.role === 'host', resetGame: state.started && state.gameMode === 'peer', keepDialog: true, note: peerUi.role === 'host' ? 'Room closed.' : 'Disconnected from the room.' })}
+        onRetryFriendInvite={() => {
+          if (peerUi.mode === 'host') {
+            startHostInvite({ autoShare: false });
+            return;
+          }
+          startGuestConnection();
+        }}
         canContinueGame={hasSavedGame}
         onContinueGame={handleContinueSavedGame}
         onAdventureOpen={() => setMenuScreen('adventure')}
@@ -2622,6 +3646,17 @@ export default function App() {
               )}
               <button onClick={handleAdventureReturnToMenu} className="w-full py-3 bg-slate-900/92 hover:bg-slate-800 text-slate-100 rounded-xl font-bold tracking-widest uppercase border border-slate-600 transition-colors">Back To Menu</button>
             </>
+          ) : isPeerMatch ? (
+            <>
+              {peerUi.role === 'host' ? (
+                <button onClick={() => rawDispatch({ type: 'START_GAME', mode: 'peer', difficulty: state.difficulty })} className="w-full py-3 bg-[#38bdf8] hover:bg-[#22c7ff] text-slate-950 rounded-xl font-bold tracking-widest uppercase border border-sky-200/70 shadow-[0_0_24px_rgba(56,189,248,0.28)] transition-colors">Play Again</button>
+              ) : (
+                <div className="w-full py-3 rounded-xl border border-slate-700 bg-slate-900/72 text-slate-300 text-sm tracking-[0.16em] uppercase">
+                  Waiting For Host
+                </div>
+              )}
+              <button onClick={returnToMenu} className="w-full py-3 bg-slate-900/92 hover:bg-slate-800 text-slate-100 rounded-xl font-bold tracking-widest uppercase border border-slate-600 transition-colors">{peerUi.role === 'host' ? 'Close Room' : 'Leave Room'}</button>
+            </>
           ) : (
             <>
               <button onClick={() => dispatch({ type: 'START_GAME', mode: state.gameMode, difficulty: state.difficulty, aiCharacterId: state.aiCharacterId, playerAiCharacterId: state.playerAiCharacterId })} className="w-full py-3 bg-[#38bdf8] hover:bg-[#22c7ff] text-slate-950 rounded-xl font-bold tracking-widest uppercase border border-sky-200/70 shadow-[0_0_24px_rgba(56,189,248,0.28)] transition-colors">Play Again</button>
@@ -2689,6 +3724,16 @@ export default function App() {
     <div className="h-dvh bg-[#0f121a] text-slate-200 flex flex-col font-sans select-none relative pb-safe overflow-hidden">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_#1e293b_0%,_#020617_100%)] opacity-80 pointer-events-none" />
       <div className="absolute inset-0 opacity-[0.03] pointer-events-none mix-blend-overlay" style={{backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'60\' height=\'60\' viewBox=\'0 0 60 60\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'none\' fill-rule=\'evenodd\'%3E%3Cg fill=\'%23ffffff\' fill-opacity=\'1\'%3E%3Cpath d=\'M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z\'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")'}} />
+      {isPeerSessionActive && (
+        <div className={`absolute top-3 left-1/2 -translate-x-1/2 z-[120] flex items-center gap-2 rounded-full border px-4 py-2 text-[10px] font-black uppercase tracking-[0.16em] shadow-[0_12px_28px_rgba(2,6,23,0.45)] backdrop-blur-sm ${
+          peerUi.status === 'connected'
+            ? 'border-emerald-300/40 bg-emerald-400/14 text-emerald-100'
+            : 'border-amber-300/35 bg-slate-950/82 text-slate-200'
+        }`}>
+          {peerUi.status === 'connected' ? <Wifi size={12} /> : <WifiOff size={12} />}
+          <span>{peerUi.role === 'host' ? 'Host' : 'Guest'} {PEER_STATUS_LABELS[peerUi.status] || peerUi.status}</span>
+        </div>
+      )}
       
       {/* ZOOMED CARD OVERLAY */}
       {zoomedCard && (
@@ -2743,16 +3788,22 @@ export default function App() {
       {state.phase === 'mulligan' && !state.pendingAction && (
          <div className="absolute inset-0 bg-black/90 z-[110] flex flex-col items-center justify-center p-4 backdrop-blur-md animate-in fade-in duration-300">
              <h2 className="font-arena-display text-4xl font-black tracking-[0.12em] uppercase text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300 mb-2 text-center w-full">Starting Hand</h2>
-             <p className="text-slate-400 mb-8 font-mono">Mulligans taken: {state.mulliganCount || 0}</p>
+             <p className="text-slate-400 mb-8 font-mono">Mulligans taken: {currentMulliganCount}</p>
              
              <div className="flex gap-2 sm:gap-4 justify-center mb-12 flex-wrap max-w-4xl">
                 {state.player.hand.map(c => <div key={c.id} className="animate-in slide-in-from-bottom-8"><Card card={c} official={useOfficialCards} onZoom={setZoomedCard} /></div>)}
              </div>
   
-              <div className="flex gap-6">
-                 <button onClick={() => dispatch({ type: 'KEEP_HAND' })} className="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-black tracking-widest uppercase rounded-xl shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all hover:scale-105">Keep Hand</button>
-                <button disabled={(state.mulliganCount || 0) >= 7} onClick={() => dispatch({ type: 'MULLIGAN' })} className="px-8 py-4 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-200 font-black tracking-widest uppercase rounded-xl shadow-lg border border-slate-700 transition-all hover:scale-105 disabled:hover:scale-100">Mulligan</button>
-              </div>
+              {state.priority === 'player' ? (
+                <div className="flex gap-6">
+                   <button onClick={() => dispatch({ type: 'KEEP_HAND', player: 'player' })} className="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white font-black tracking-widest uppercase rounded-xl shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all hover:scale-105">Keep Hand</button>
+                  <button disabled={currentMulliganCount >= 7} onClick={() => dispatch({ type: 'MULLIGAN', player: 'player' })} className="px-8 py-4 bg-slate-800 hover:bg-slate-700 disabled:bg-slate-900 disabled:text-slate-600 text-slate-200 font-black tracking-widest uppercase rounded-xl shadow-lg border border-slate-700 transition-all hover:scale-105 disabled:hover:scale-100">Mulligan</button>
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-slate-700 bg-slate-900/82 px-6 py-4 text-center text-slate-300">
+                  Waiting for your friend to finish their mulligan choice...
+                </div>
+              )}
          </div>
       )}
 
@@ -3142,7 +4193,7 @@ export default function App() {
                  <div className="absolute -bottom-1 -right-1 bg-red-900 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full border border-red-500 shadow-lg">{state.ai.life}</div>
               </div>
               <div className="flex flex-col">
-                 <span className="text-xs text-slate-100 font-black tracking-[0.08em] uppercase">{currentOpponentCharacter?.name || AI_DIFFICULTY_LABELS[state.difficulty] || 'Opponent'}</span>
+                 <span className="text-xs text-slate-100 font-black tracking-[0.08em] uppercase">{isPeerMatch ? 'Friend' : (currentOpponentCharacter?.name || AI_DIFFICULTY_LABELS[state.difficulty] || 'Opponent')}</span>
                  <span className="text-[10px] text-slate-200 font-mono flex items-center gap-1">Hand: {state.ai.hand.length}</span>
               </div>
            </div>
