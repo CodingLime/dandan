@@ -1622,28 +1622,30 @@ const LandingScreen = ({
         WebkitTapHighlightColor: 'transparent'
       }}
     >
-      <div
-        ref={landingRippleSurfaceRef}
-        className={`absolute inset-0 bg-center bg-cover bg-no-repeat transition-[opacity,transform,filter] duration-[1400ms] ease-out ${
-          backgroundVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-[1.04]'
-        }`}
-        style={{
-          backgroundImage: `url(${landingBackground})`,
-          filter: menuScreen === 'home'
-            ? 'saturate(1.08) brightness(1.12) contrast(1.04)'
-            : 'saturate(1.02) brightness(0.92)'
-        }}
-      />
-      <div
-        className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${
-          backgroundVisible ? 'opacity-100' : 'opacity-0'
-        }`}
-        style={{
-          background: menuScreen === 'home'
-            ? 'linear-gradient(180deg, rgba(2,6,23,0.22) 0%, rgba(2,6,23,0.42) 52%, rgba(2,6,23,0.58) 100%)'
-            : 'linear-gradient(180deg, rgba(2,6,23,0.48) 0%, rgba(2,6,23,0.72) 100%)'
-        }}
-      />
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div
+          ref={landingRippleSurfaceRef}
+          className={`absolute inset-0 bg-center bg-cover bg-no-repeat transition-[opacity,transform,filter] duration-[1400ms] ease-out ${
+            backgroundVisible ? 'opacity-100 scale-100' : 'opacity-0 scale-[1.04]'
+          }`}
+          style={{
+            backgroundImage: `url(${landingBackground})`,
+            filter: menuScreen === 'home'
+              ? 'saturate(1.08) brightness(1.12) contrast(1.04)'
+              : 'saturate(1.02) brightness(0.92)'
+          }}
+        />
+        <div
+          className={`absolute inset-0 transition-opacity duration-[1400ms] ease-out ${
+            backgroundVisible ? 'opacity-100' : 'opacity-0'
+          }`}
+          style={{
+            background: menuScreen === 'home'
+              ? 'linear-gradient(180deg, rgba(2,6,23,0.22) 0%, rgba(2,6,23,0.42) 52%, rgba(2,6,23,0.58) 100%)'
+              : 'linear-gradient(180deg, rgba(2,6,23,0.48) 0%, rgba(2,6,23,0.72) 100%)'
+          }}
+        />
+      </div>
       <div className={`relative z-10 mx-auto w-full max-w-6xl px-4 sm:px-6 ${
         menuScreen === 'home' ? 'py-6 sm:py-8' : 'flex h-full flex-col py-3 sm:py-4'
       }`}>
