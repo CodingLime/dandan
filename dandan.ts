@@ -226,6 +226,85 @@ const getGroupedList = (zoneList, sortMode = 'count') => {
   });
 };
 
+const POLICY_CONTENT = {
+  privacy: {
+    title: 'Privacy Policy',
+    subtitle: 'How Forgetfull Fish handles data',
+    sections: [
+      {
+        heading: 'What This Site Stores',
+        body: 'Forgetfull Fish stores a few gameplay and preference values in your browser so the app can work correctly. This includes your current saved game, your adventure progress, and a visual preference for the landing background.'
+      },
+      {
+        heading: 'What This Site Does Not Collect',
+        body: 'This site does not ask for your name, email address, or account details. It also does not use advertising trackers or analytics tools in the current version of the app.'
+      },
+      {
+        heading: 'Third-Party Requests',
+        body: 'Official card art is loaded from Scryfall. When those images are requested, your browser may contact Scryfall or its delivery infrastructure as part of normal image loading.'
+      },
+      {
+        heading: 'Your Control',
+        body: 'You can clear this data at any time by clearing your browser site data or local storage. Doing that will remove saved progress and current-game continuation data.'
+      }
+    ]
+  },
+  storage: {
+    title: 'Cookie / Local Storage',
+    subtitle: 'Storage used by this app',
+    sections: [
+      {
+        heading: 'Cookies',
+        body: 'Forgetfull Fish does not currently set its own tracking cookies for advertising or analytics.'
+      },
+      {
+        heading: 'Local Storage',
+        body: 'The app uses browser local storage for functional features: saving an unfinished match so you can continue later, storing adventure progress, and remembering the landing background selection.'
+      },
+      {
+        heading: 'Why It Is Used',
+        body: 'This storage is used to make the game work as expected. If local storage is disabled or cleared, continue-game and progress features may stop working or reset.'
+      },
+      {
+        heading: 'Third-Party Content',
+        body: 'Card images can be loaded from Scryfall. Those image requests are separate from the app local storage and depend on your browser contacting that external service.'
+      }
+    ]
+  }
+};
+
+const PolicyOverlay = ({ policyKey, onClose }) => {
+  const policy = POLICY_CONTENT[policyKey];
+  if (!policy) return null;
+
+  return (
+    <div className="absolute inset-0 z-30 flex items-start justify-center overflow-y-auto bg-[rgba(2,6,23,0.84)] p-4 backdrop-blur-sm sm:p-6">
+      <div className="my-auto w-full max-w-2xl rounded-[1.9rem] border border-white/10 bg-slate-950/96 p-5 text-left shadow-[0_30px_80px_rgba(2,6,23,0.72)] sm:p-6">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white sm:text-[2rem]">{policy.title}</h2>
+            <div className="mt-2 text-[10px] uppercase tracking-[0.22em] text-slate-300/78">{policy.subtitle}</div>
+          </div>
+          <button onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-900 border border-slate-700 text-slate-400 transition-all hover:bg-slate-800 hover:text-white">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="space-y-4">
+          {policy.sections.map((section) => (
+            <div key={section.heading} className="rounded-[1.35rem] border border-slate-800 bg-slate-900/72 p-4">
+              <div className="font-arena-display text-[1.05rem] tracking-[0.05em] text-cyan-100">{section.heading}</div>
+              <p className="mt-2 text-sm leading-6 text-slate-300">{section.body}</p>
+            </div>
+          ))}
+        </div>
+        <button onClick={onClose} className="mt-5 w-full rounded-2xl border border-sky-200/70 bg-[#38bdf8] py-3.5 font-bold uppercase tracking-[0.04em] text-slate-950 shadow-[0_14px_28px_rgba(56,189,248,0.22)] transition-colors hover:bg-[#22c7ff]">
+          Close
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const CardCollectionOverlay = ({ viewingZone, cards = [], official, onClose, onZoom = null }) => {
   if (!viewingZone) return null;
 
@@ -1378,6 +1457,7 @@ const LandingScreen = ({
   onRestartAdventure
 }) => {
   const [homeRevealStep, setHomeRevealStep] = useState(menuScreen === 'home' ? 0 : 3);
+  const [activePolicy, setActivePolicy] = useState(null);
   const landingRippleSurfaceRef = useRef(null);
   const landingRippleInstanceRef = useRef(null);
   const hasPlayedInitialRevealRef = useRef(menuScreen !== 'home');
@@ -1593,6 +1673,13 @@ const LandingScreen = ({
         />
       )}
 
+      {activePolicy && (
+        <PolicyOverlay
+          policyKey={activePolicy}
+          onClose={() => setActivePolicy(null)}
+        />
+      )}
+
       {showMenuSettings && (
         <div className="absolute inset-0 z-20 flex items-start justify-center overflow-y-auto bg-[rgba(2,6,23,0.78)] p-4 backdrop-blur-sm sm:p-6">
           <div className="my-auto flex w-full max-w-md flex-col items-center text-center">
@@ -1643,6 +1730,34 @@ const LandingScreen = ({
                   <div className="font-arena-display text-[1.18rem] tracking-[0.04em]">Library</div>
                   <div className="mt-2 text-[9px] uppercase tracking-[0.2em] text-slate-200/72">
                     Open Decklist
+                  </div>
+                </div>
+              </button>
+              <button
+                onClick={() => {
+                  onCloseSettings();
+                  setActivePolicy('privacy');
+                }}
+                className="w-full max-w-[15.75rem] min-h-[64px] rounded-full bg-slate-800/44 px-5 py-3 text-white shadow-[0_18px_36px_rgba(15,23,42,0.24)] transition-all hover:bg-slate-800/54"
+              >
+                <div className="flex flex-col items-center justify-center leading-none">
+                  <div className="font-arena-display text-[1.18rem] tracking-[0.04em]">Privacy Policy</div>
+                  <div className="mt-2 text-[9px] uppercase tracking-[0.2em] text-slate-200/72">
+                    Data Handling
+                  </div>
+                </div>
+              </button>
+              <button
+                onClick={() => {
+                  onCloseSettings();
+                  setActivePolicy('storage');
+                }}
+                className="w-full max-w-[15.75rem] min-h-[64px] rounded-full bg-slate-800/44 px-5 py-3 text-white shadow-[0_18px_36px_rgba(15,23,42,0.24)] transition-all hover:bg-slate-800/54"
+              >
+                <div className="flex flex-col items-center justify-center leading-none">
+                  <div className="font-arena-display text-[1.18rem] tracking-[0.04em]">Cookie Policy</div>
+                  <div className="mt-2 text-[9px] uppercase tracking-[0.2em] text-slate-200/72">
+                    Site Storage
                   </div>
                 </div>
               </button>
@@ -2349,6 +2464,17 @@ export default function App() {
   }
 
   const isAutoPassing = state.priority === 'player' && !state.stackResolving && !state.pendingTargetSelection && !state.pendingAction && !checkHasActions(state, 'player');
+  const hidePassButton = Boolean(
+    zoomedCard ||
+    viewingZone ||
+    showLog ||
+    showExitConfirm ||
+    showMenuSettings ||
+    showRivalMenu ||
+    state.pendingTargetSelection ||
+    state.pendingAction ||
+    state.phase === 'mulligan'
+  );
 
   let passIcon = <SkipForward size={14} className={state.priority === 'player' && !state.stackResolving ? 'text-current' : 'text-slate-600'}/>;
   let passLabel = 'PASS';
@@ -2717,9 +2843,9 @@ export default function App() {
       )}
 
       {/* ARENA STYLE PASS BUTTON - MOVED TO BOTTOM RIGHT */}
-      {!isAiMirror && <div className="absolute bottom-6 right-4 sm:bottom-8 sm:right-8 z-[150] flex flex-col items-center pointer-events-auto">
+      {!isAiMirror && !hidePassButton && <div className="absolute bottom-6 right-4 sm:bottom-8 sm:right-8 z-[150] flex flex-col items-center pointer-events-auto">
          <button
-           disabled={state.priority !== 'player' || state.stackResolving || isAutoPassing}
+           disabled={hidePassButton || state.priority !== 'player' || state.stackResolving || isAutoPassing}
            onClick={() => { AudioEngine.init(); dispatch({ type: 'PASS_PRIORITY', player: 'player' }); }}
            onTouchEnd={(e) => e.currentTarget.blur()}
            className={`arena-pass-button relative group overflow-hidden w-16 h-16 sm:w-20 sm:h-20 rounded-full flex flex-col items-center justify-center gap-1 transition-all shadow-[0_0_25px_rgba(0,0,0,0.8)] border-2 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 ${
