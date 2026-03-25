@@ -275,6 +275,11 @@ const ADVENTURE_FIXED_DIFFICULTY = 'hard';
 const ADVENTURE_BOSS_ID = ADVENTURE_ROUTE[ADVENTURE_ROUTE.length - 1];
 const RIVAL_PROGRESS_STORAGE_KEY = 'forgetful-fish-rival-progress-v1';
 const LANDING_BACKGROUNDS = [wall1Background, wall2Background, wall3Background, wall4Background];
+const MENU_PRELOAD_URLS = Array.from(new Set([
+  ...Object.values(DIFFICULTY_ART),
+  ...Object.values(CHARACTER_ART),
+  ...LANDING_BACKGROUNDS
+]));
 const LANDING_BACKGROUND_STORAGE_KEY = 'forgetful-fish-landing-bg-v1';
 const clampAdventureProgress = (value) => Math.max(0, Math.min(Number.isFinite(value) ? value : 0, ADVENTURE_ROUTE.length));
 const getRandomLandingBackground = (exclude = null) => {
@@ -320,6 +325,52 @@ const saveRivalProgress = (adventureWinsCount) => {
     }));
   } catch (_error) {}
 };
+const preloadImageUrls = (urls, onProgress = null) => {
+  if (typeof window === 'undefined' || urls.length === 0) {
+    onProgress?.(100);
+    return Promise.resolve();
+  }
+
+  let loaded = 0;
+  const total = urls.length;
+  const reportProgress = () => {
+    onProgress?.(Math.floor((loaded / total) * 100));
+  };
+
+  reportProgress();
+
+  return Promise.all(
+    urls.map((url) => new Promise((resolve) => {
+      const img = new window.Image();
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        loaded += 1;
+        reportProgress();
+        resolve();
+      };
+
+      img.onload = () => {
+        if (typeof img.decode === 'function') {
+          img.decode().catch(() => {}).finally(finish);
+        } else {
+          finish();
+        }
+      };
+      img.onerror = finish;
+      img.src = url;
+
+      if (img.complete) {
+        if (typeof img.decode === 'function') {
+          img.decode().catch(() => {}).finally(finish);
+        } else {
+          finish();
+        }
+      }
+    }))
+  ).then(() => {});
+};
 
 // --- PRELOADER COMPONENT ---
 const Preloader = ({ onComplete }) => {
@@ -328,22 +379,12 @@ const Preloader = ({ onComplete }) => {
   useEffect(() => {
     const urls = new Set();
     Object.values(CARDS).forEach(c => { urls.add(c.image); urls.add(c.fullImage); });
-    Object.values(DIFFICULTY_ART).forEach(url => urls.add(url));
-    Object.values(CHARACTER_ART).forEach(url => urls.add(url));
-    LANDING_BACKGROUNDS.forEach(url => urls.add(url));
     const urlArray = Array.from(urls);
-    let loaded = 0;
     
     if (urlArray.length === 0) return onComplete();
-    
-    urlArray.forEach(url => {
-      const img = new Image();
-      img.onload = img.onerror = () => {
-        loaded++;
-        setProgress(Math.floor((loaded / urlArray.length) * 100));
-        if (loaded === urlArray.length) setTimeout(onComplete, 300);
-      };
-      img.src = url;
+
+    preloadImageUrls([...urlArray, ...MENU_PRELOAD_URLS], setProgress).then(() => {
+      setTimeout(onComplete, 300);
     });
   }, [onComplete]);
 
@@ -1108,6 +1149,7 @@ const LandingScreen = ({
   onToggleOfficialCards,
   showQuickGameDialog,
   selectedDifficulty,
+  menuAssetsReady,
   onQuickGameOpen,
   onQuickGameClose,
   onQuickGameStart,
@@ -1176,7 +1218,7 @@ const LandingScreen = ({
 
   const backgroundVisible = menuScreen !== 'home' || homeRevealStep >= 1;
   const titleVisible = menuScreen !== 'home' || homeRevealStep >= 2;
-  const actionsVisible = menuScreen !== 'home' || homeRevealStep >= 3;
+  const actionsVisible = menuScreen !== 'home' || (menuAssetsReady && homeRevealStep >= 3);
 
   useEffect(() => {
     const surface = landingRippleSurfaceRef.current;
@@ -1396,6 +1438,7 @@ export default function App() {
   const [showLog, setShowLog] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [muted, setMuted] = useState(false);
+  const [menuAssetsReady, setMenuAssetsReady] = useState(() => typeof window === 'undefined');
   const [draggedIdx, setDraggedIdx] = useState(null);
   const [zoomedCard, setZoomedCard] = useState(null); 
   const [viewingZone, setViewingZone] = useState(null); 
@@ -1422,6 +1465,16 @@ export default function App() {
   const availableAdventureStages = isAdventureComplete ? ADVENTURE_ROUTE.length : Math.min(adventureWinsCount + 1, ADVENTURE_ROUTE.length);
   useEffect(() => { AudioEngine.muted = muted; }, [muted]);
   useEffect(() => { saveRivalProgress(adventureWinsCount); }, [adventureWinsCount]);
+  useEffect(() => {
+    if (menuAssetsReady) return;
+    let active = true;
+    preloadImageUrls(MENU_PRELOAD_URLS).then(() => {
+      if (active) setMenuAssetsReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, [menuAssetsReady]);
 
   const refreshLandingBackground = () => {
     setLandingBackground((previousBackground) => {
@@ -1655,6 +1708,7 @@ export default function App() {
         onToggleOfficialCards={() => setUseOfficialCards(!useOfficialCards)}
         showQuickGameDialog={showQuickGameDialog}
         selectedDifficulty={selectedDifficulty}
+        menuAssetsReady={menuAssetsReady}
         onQuickGameOpen={() => setShowQuickGameDialog(true)}
         onQuickGameClose={() => setShowQuickGameDialog(false)}
         onQuickGameStart={handleStartQuickGame}
