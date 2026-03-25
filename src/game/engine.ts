@@ -46,6 +46,7 @@ const DECKLIST = [
   ...Array(2).fill(CARDS.SURGICAL_BAY), ...Array(2).fill(CARDS.TEMPLE), ...Array(2).fill(CARDS.CAPTURE), ...Array(2).fill(CARDS.CHART),
   ...Array(2).fill(CARDS.DAYS_UNDOING), ...Array(2).fill(CARDS.CONTROL_MAGIC)
 ];
+export const FULL_DECKLIST = DECKLIST;
 const CARD_TEMPLATES_BY_NAME = DECKLIST.reduce((map, card) => {
   if (!map[card.name]) map[card.name] = card;
   return map;
@@ -746,7 +747,7 @@ const resetHiddenKnowledge = (state) => {
 
 // --- GAME STATE ENGINE ---
 export const initialState = {
-  started: false, deck: [], graveyard: [], exile: [], stack: [], knowledge: createKnowledgeState(), turn: 'player', phase: 'mulligan', priority: 'player', 
+  started: false, deck: [], graveyard: [], exile: [], stack: [], knowledge: createKnowledgeState(), turn: 'player', phase: 'mulligan', priority: 'player',
   consecutivePasses: 0, actionCount: 0, pendingTargetSelection: null, pendingAction: null,
   mulliganCount: 0, isFirstTurn: true,
   gameMode: 'player',
@@ -760,6 +761,62 @@ export const initialState = {
   hasBlocked: { player: false, ai: false },
   extraTurns: { player: 0, ai: 0 },
   winner: null, log: [], stackResolving: false
+};
+const restoreSavedGameState = (snapshot) => {
+  if (!snapshot?.started || !Array.isArray(snapshot.deck) || !snapshot.player || !snapshot.ai) {
+    return { ...initialState };
+  }
+
+  const restored = structuredClone(snapshot);
+
+  return {
+    ...initialState,
+    ...restored,
+    started: true,
+    deck: Array.isArray(restored.deck) ? restored.deck : [],
+    graveyard: Array.isArray(restored.graveyard) ? restored.graveyard : [],
+    exile: Array.isArray(restored.exile) ? restored.exile : [],
+    stack: Array.isArray(restored.stack) ? restored.stack : [],
+    knowledge: restored.knowledge || createKnowledgeState(),
+    player: {
+      ...initialState.player,
+      ...(restored.player || {}),
+      hand: Array.isArray(restored.player?.hand) ? restored.player.hand : [],
+      board: Array.isArray(restored.player?.board) ? restored.player.board : []
+    },
+    ai: {
+      ...initialState.ai,
+      ...(restored.ai || {}),
+      hand: Array.isArray(restored.ai?.hand) ? restored.ai.hand : [],
+      board: Array.isArray(restored.ai?.board) ? restored.ai.board : []
+    },
+    floatingMana: {
+      player: {
+        ...initialState.floatingMana.player,
+        ...(restored.floatingMana?.player || {})
+      },
+      ai: {
+        ...initialState.floatingMana.ai,
+        ...(restored.floatingMana?.ai || {})
+      }
+    },
+    hasAttacked: {
+      ...initialState.hasAttacked,
+      ...(restored.hasAttacked || {})
+    },
+    hasBlocked: {
+      ...initialState.hasBlocked,
+      ...(restored.hasBlocked || {})
+    },
+    extraTurns: {
+      ...initialState.extraTurns,
+      ...(restored.extraTurns || {})
+    },
+    pendingAction: restored.pendingAction || null,
+    pendingTargetSelection: restored.pendingTargetSelection || null,
+    winner: restored.winner || null,
+    log: Array.isArray(restored.log) ? restored.log : []
+  };
 };
 const untapBoard = (board) => board.map(c => ({ ...c, tapped: false, summoningSickness: false, attacking: false, blocking: false }));
 
@@ -2818,6 +2875,9 @@ export const createGameReducer = (effects = defaultEffects) => {
   switch (action.type) {
     case 'RETURN_TO_MENU':
       return { ...initialState };
+
+    case 'LOAD_SAVED_GAME':
+      return restoreSavedGameState(action.snapshot);
 
     case 'SURRENDER':
       return {

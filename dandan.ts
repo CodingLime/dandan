@@ -2,7 +2,7 @@
 import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeft, ArrowLeftRight, Target, Droplet, Shield, CloudRain, LogOut } from 'lucide-react';
 import $ from 'jquery';
 import 'jquery.ripples';
-import { AI_CHARACTERS, AI_DIFFICULTIES, AI_DIFFICULTY_LABELS, AI_SPEED, CARDS, DANDAN_NAME, DEFAULT_AI_CHARACTER_ID, LAND_TYPE_CHOICES, PREDICT_OPTIONS, SHARED_DECK_SIZE, canDandanAttackDefender, checkHasActions, chooseAiAction, controlsIsland, createGameReducer, getAiCharacter, getAiPendingActions, getAiPolicyForActor, getAvailableMana, getManaPool, initialState, isActivatable, isCastable, isCyclable, isValidTarget } from './src/game/engine';
+import { AI_CHARACTERS, AI_DIFFICULTIES, AI_DIFFICULTY_LABELS, AI_SPEED, CARDS, DANDAN_NAME, DEFAULT_AI_CHARACTER_ID, FULL_DECKLIST, LAND_TYPE_CHOICES, PREDICT_OPTIONS, SHARED_DECK_SIZE, canDandanAttackDefender, checkHasActions, chooseAiAction, controlsIsland, createGameReducer, getAiCharacter, getAiPendingActions, getAiPolicyForActor, getAvailableMana, getManaPool, initialState, isActivatable, isCastable, isCyclable, isValidTarget } from './src/game/engine';
 import archivistPortrait from './img/Archivist.png';
 import cartographerPortrait from './img/Cartographer.png';
 import eelPortrait from './img/Eel.png';
@@ -185,7 +185,7 @@ const PhaseTracker = ({ currentPhase, turn }) => {
                    {p.icon}
                 </div>
                 {index < phases.length - 1 && (
-                   <div className={`h-[2px] w-1.5 sm:w-2 mx-0.5 rounded-full transition-colors ${isActive || currentPhase === phases[index+1].id ? 'bg-slate-500' : 'bg-slate-800'}`} />
+                   <div className="h-[2px] w-1.5 sm:w-2 mx-0.5 rounded-full opacity-0" />
                 )}
              </React.Fragment>
            )
@@ -195,14 +195,73 @@ const PhaseTracker = ({ currentPhase, turn }) => {
   );
 };
 
-const getGroupedList = (zoneList) => {
+const getCardTypeRank = (card) => {
+  if (card?.type?.includes('Creature')) return 0;
+  if (card?.type?.includes('Instant')) return 1;
+  if (card?.type?.includes('Sorcery')) return 2;
+  if (card?.type?.includes('Enchantment')) return 3;
+  if (card?.isLand || card?.type?.includes('Land')) return 5;
+  return 4;
+};
+
+const getGroupedList = (zoneList, sortMode = 'count') => {
   const groups = {};
   zoneList.forEach(c => {
      const key = `${c.name}|${c.fullImage || c.image || ''}`;
      if(!groups[key]) groups[key] = { ...c, count: 0, groupKey: key };
      groups[key].count++;
   });
-  return Object.values(groups).sort((a,b) => b.count - a.count);
+  return Object.values(groups).sort((a, b) => {
+    if (sortMode === 'deck') {
+      const typeDiff = getCardTypeRank(a) - getCardTypeRank(b);
+      if (typeDiff !== 0) return typeDiff;
+      const costDiff = (a.cost || 0) - (b.cost || 0);
+      if (costDiff !== 0) return costDiff;
+      const nameDiff = a.name.localeCompare(b.name);
+      if (nameDiff !== 0) return nameDiff;
+      return (a.fullImage || a.image || '').localeCompare(b.fullImage || b.image || '');
+    }
+
+    return b.count - a.count || a.name.localeCompare(b.name);
+  });
+};
+
+const CardCollectionOverlay = ({ viewingZone, cards = [], official, onClose, onZoom = null }) => {
+  if (!viewingZone) return null;
+
+  const explorerGroups = viewingZone === 'deck'
+    ? getGroupedList(FULL_DECKLIST, 'deck')
+    : getGroupedList(cards);
+  const isExplorerEmpty = explorerGroups.length === 0;
+
+  return (
+    <div className="absolute inset-0 bg-black/95 z-[160] flex flex-col p-4 sm:p-8 backdrop-blur-lg animate-in fade-in duration-200">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="font-arena-display text-2xl font-bold tracking-[0.12em] uppercase text-white flex items-center gap-3">
+          {viewingZone === 'deck' ? <Layers size={28} className="text-blue-400" /> : <Skull size={28} className="text-slate-400" />}
+          {viewingZone === 'deck' ? 'Library' : 'Graveyard'}
+        </h2>
+        <button onClick={onClose} className="text-slate-400 hover:text-white p-2 bg-slate-800 rounded-full transition-colors"><X size={24} /></button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar grid grid-cols-2 justify-items-stretch content-start gap-x-2 gap-y-8 pt-5 pb-20 sm:gap-x-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+        {explorerGroups.map(group => (
+          <div key={group.groupKey || `${group.name}-${group.count}`} className="relative group flex w-full min-w-0 flex-col items-center animate-in zoom-in-95 duration-300">
+            <Card card={group} zone="explorer" official={official} onZoom={onZoom} />
+            <div className="absolute -top-3 -right-3 bg-[rgb(79_88_106_/_61%)] text-slate-100 font-black px-3 py-1 rounded-full border-2 border-slate-900 shadow-xl z-10 text-sm">
+              x{group.count}
+            </div>
+          </div>
+        ))}
+        {isExplorerEmpty && (
+          <div className="col-span-full text-slate-500 text-2xl font-bold mt-32 flex flex-col items-center gap-4">
+            {viewingZone === 'deck' ? <Layers size={48} /> : <Skull size={48} />}
+            Empty
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 const getHandFanStyle = (index, total, side = 'bottom') => {
@@ -274,11 +333,19 @@ const ADVENTURE_MAP_LAYOUT = [
 const ADVENTURE_FIXED_DIFFICULTY = 'hard';
 const ADVENTURE_BOSS_ID = ADVENTURE_ROUTE[ADVENTURE_ROUTE.length - 1];
 const RIVAL_PROGRESS_STORAGE_KEY = 'forgetful-fish-rival-progress-v1';
+const CURRENT_GAME_STORAGE_KEY = 'forgetful-fish-current-game-v1';
 const LANDING_BACKGROUNDS = [wall1Background, wall2Background, wall3Background, wall4Background];
 const MENU_PRELOAD_URLS = Array.from(new Set([
   ...Object.values(DIFFICULTY_ART),
   ...Object.values(CHARACTER_ART),
   ...LANDING_BACKGROUNDS
+]));
+const CARD_PRELOAD_URLS = Array.from(new Set(
+  Object.values(CARDS).flatMap((card) => [card.image, card.fullImage]).filter(Boolean)
+));
+const APP_PRELOAD_URLS = Array.from(new Set([
+  ...MENU_PRELOAD_URLS,
+  ...CARD_PRELOAD_URLS
 ]));
 const LANDING_BACKGROUND_STORAGE_KEY = 'forgetful-fish-landing-bg-v1';
 const clampAdventureProgress = (value) => Math.max(0, Math.min(Number.isFinite(value) ? value : 0, ADVENTURE_ROUTE.length));
@@ -325,14 +392,98 @@ const saveRivalProgress = (adventureWinsCount) => {
     }));
   } catch (_error) {}
 };
+const isRestorableGameSnapshot = (snapshot) => Boolean(
+  snapshot?.started &&
+  !snapshot?.winner &&
+  snapshot?.player &&
+  snapshot?.ai &&
+  Array.isArray(snapshot?.deck)
+);
+const loadCurrentGameSnapshot = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(CURRENT_GAME_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const snapshot = parsed?.snapshot ?? parsed?.state ?? parsed;
+    return isRestorableGameSnapshot(snapshot) ? snapshot : null;
+  } catch (_error) {
+    return null;
+  }
+};
+const saveCurrentGameSnapshot = (snapshot) => {
+  if (typeof window === 'undefined' || !isRestorableGameSnapshot(snapshot)) return;
+  try {
+    window.localStorage.setItem(CURRENT_GAME_STORAGE_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      snapshot
+    }));
+  } catch (_error) {}
+};
+const clearCurrentGameSnapshot = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(CURRENT_GAME_STORAGE_KEY);
+  } catch (_error) {}
+};
+const SESSION_PRELOADED_IMAGES = new Map();
+const SESSION_IMAGE_PRELOADS = new Map();
+const preloadSingleImage = (url) => {
+  if (!url || typeof window === 'undefined') return Promise.resolve();
+  if (SESSION_PRELOADED_IMAGES.has(url)) return Promise.resolve();
+  const existingPreload = SESSION_IMAGE_PRELOADS.get(url);
+  if (existingPreload) return existingPreload;
+
+  const preloadPromise = new Promise((resolve) => {
+    const img = new window.Image();
+    let settled = false;
+    const finish = (didLoad) => {
+      if (settled) return;
+      settled = true;
+      if (didLoad) {
+        SESSION_PRELOADED_IMAGES.set(url, img);
+      }
+      SESSION_IMAGE_PRELOADS.delete(url);
+      resolve();
+    };
+
+    img.decoding = 'sync';
+    img.loading = 'eager';
+    try {
+      img.fetchPriority = 'high';
+    } catch (_error) {}
+
+    img.onload = () => {
+      if (typeof img.decode === 'function') {
+        img.decode().catch(() => {}).finally(() => finish(true));
+      } else {
+        finish(true);
+      }
+    };
+    img.onerror = () => finish(false);
+    img.src = url;
+
+    if (img.complete) {
+      if (typeof img.decode === 'function') {
+        img.decode().catch(() => {}).finally(() => finish(true));
+      } else {
+        finish(true);
+      }
+    }
+  });
+
+  SESSION_IMAGE_PRELOADS.set(url, preloadPromise);
+  return preloadPromise;
+};
 const preloadImageUrls = (urls, onProgress = null) => {
-  if (typeof window === 'undefined' || urls.length === 0) {
+  const uniqueUrls = Array.from(new Set((urls || []).filter(Boolean)));
+  if (typeof window === 'undefined' || uniqueUrls.length === 0) {
     onProgress?.(100);
     return Promise.resolve();
   }
 
   let loaded = 0;
-  const total = urls.length;
+  const total = uniqueUrls.length;
   const reportProgress = () => {
     onProgress?.(Math.floor((loaded / total) * 100));
   };
@@ -340,52 +491,57 @@ const preloadImageUrls = (urls, onProgress = null) => {
   reportProgress();
 
   return Promise.all(
-    urls.map((url) => new Promise((resolve) => {
-      const img = new window.Image();
-      let settled = false;
-      const finish = () => {
-        if (settled) return;
-        settled = true;
+    uniqueUrls.map((url) =>
+      preloadSingleImage(url).finally(() => {
         loaded += 1;
         reportProgress();
-        resolve();
-      };
-
-      img.onload = () => {
-        if (typeof img.decode === 'function') {
-          img.decode().catch(() => {}).finally(finish);
-        } else {
-          finish();
-        }
-      };
-      img.onerror = finish;
-      img.src = url;
-
-      if (img.complete) {
-        if (typeof img.decode === 'function') {
-          img.decode().catch(() => {}).finally(finish);
-        } else {
-          finish();
-        }
-      }
-    }))
-  ).then(() => {});
+      })
+    )
+  ).then(() => {
+    onProgress?.(100);
+  });
 };
 
 // --- PRELOADER COMPONENT ---
 const Preloader = ({ onComplete }) => {
-  const [progress, setProgress] = useState(0);
+  const [revealStep, setRevealStep] = useState(0);
 
   useEffect(() => {
-    const urls = new Set();
-    Object.values(CARDS).forEach(c => { urls.add(c.image); urls.add(c.fullImage); });
-    const urlArray = Array.from(urls);
-    
-    if (urlArray.length === 0) return onComplete();
+    let active = true;
+    let completeTimer = null;
+    const revealTimers = [
+      window.setTimeout(() => {
+        if (active) setRevealStep(1);
+      }, 140),
+      window.setTimeout(() => {
+        if (active) setRevealStep(2);
+      }, 560),
+      window.setTimeout(() => {
+        if (active) setRevealStep(3);
+      }, 1020)
+    ];
 
-    preloadImageUrls([...urlArray, ...MENU_PRELOAD_URLS], setProgress).then(() => {
-      setTimeout(onComplete, 300);
+    const minimumRevealPromise = new Promise((resolve) => {
+      const resolveTimer = window.setTimeout(resolve, 1240);
+      revealTimers.push(resolveTimer);
     });
+
+    const preloadPromise = APP_PRELOAD_URLS.length > 0
+      ? preloadImageUrls(APP_PRELOAD_URLS)
+      : Promise.resolve();
+
+    Promise.all([preloadPromise, minimumRevealPromise]).then(() => {
+      if (!active) return;
+      completeTimer = window.setTimeout(() => {
+        if (active) onComplete();
+      }, 180);
+    });
+
+    return () => {
+      active = false;
+      if (completeTimer) window.clearTimeout(completeTimer);
+      revealTimers.forEach((timer) => window.clearTimeout(timer));
+    };
   }, [onComplete]);
 
   return (
@@ -395,30 +551,40 @@ const Preloader = ({ onComplete }) => {
       <div className="absolute left-[-3rem] top-10 w-44 h-44 rounded-full bg-cyan-300/16 blur-3xl" />
       <div className="absolute right-[-2rem] bottom-10 w-48 h-48 rounded-full bg-sky-300/12 blur-3xl" />
 
-      <div className="relative z-10 w-full max-w-md">
-        <div className="relative mx-auto h-32 sm:h-36 w-full rounded-[999px] border border-cyan-100/10 bg-slate-950/60 backdrop-blur-2xl shadow-[0_24px_70px_rgba(2,6,23,0.65)] overflow-hidden">
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.06)_0%,rgba(255,255,255,0)_100%)]" />
+      <div className="relative z-10 flex w-full max-w-xl flex-col items-center text-center">
+        <div className={`transition-all duration-700 ease-out ${revealStep >= 1 ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
           <div
-            className="absolute inset-y-0 left-0 rounded-[999px] bg-gradient-to-r from-cyan-500/75 via-sky-400/55 to-cyan-200/10 transition-all duration-300"
-            style={{ width: `${Math.max(progress, 8)}%` }}
-          />
-          <div className="absolute inset-x-3 top-1/2 -translate-y-1/2 h-[1px] bg-cyan-100/15" />
-
-          <div className="absolute left-[12%] top-[28%] w-2.5 h-2.5 rounded-full border border-cyan-100/40 bg-cyan-200/10 bubble-rise-1" />
-          <div className="absolute left-[48%] top-[58%] w-1.5 h-1.5 rounded-full border border-cyan-100/35 bg-cyan-200/10 bubble-rise-2" />
-          <div className="absolute right-[16%] top-[36%] w-2 h-2 rounded-full border border-cyan-100/40 bg-cyan-200/10 bubble-rise-3" />
-
-          <div
-            className="absolute top-1/2 -translate-y-1/2 transition-all duration-300"
-            style={{ left: `calc(${Math.min(progress, 96)}% - 2.75rem)` }}
+            className="font-arena-display text-[3rem] leading-[0.92] tracking-[0.08em] text-white sm:text-[4.3rem]"
+            style={{
+              textShadow: '0 0 24px rgba(34,211,238,0.16), 0 0 42px rgba(15,23,42,0.35)'
+            }}
           >
-            <div className="relative fish-bob">
-              <div className="w-16 h-10 rounded-[999px] bg-gradient-to-r from-orange-300 via-orange-400 to-orange-500 shadow-[0_0_24px_rgba(251,146,60,0.4)] border border-orange-100/30" />
-              <div className="absolute left-[-9px] top-1/2 -translate-y-1/2 w-0 h-0 border-y-[10px] border-y-transparent border-r-[14px] border-r-orange-300/90" />
-              <div className="absolute right-2 top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full bg-slate-950/85 border border-white/20" />
-              <div className="absolute right-[6px] top-[17px] w-1 h-1 rounded-full bg-white/90" />
-              <div className="absolute left-[18px] -top-2 w-4 h-4 rounded-t-[999px] rounded-b-sm bg-orange-400/90 rotate-[-18deg]" />
-              <div className="absolute left-[20px] -bottom-2 w-4 h-4 rounded-b-[999px] rounded-t-sm bg-orange-500/85 rotate-[14deg]" />
+            Forgetful
+            <br />
+            Fish
+          </div>
+        </div>
+
+        <div className={`mt-7 text-[11px] uppercase tracking-[0.34em] text-cyan-100/80 transition-all duration-700 ease-out ${revealStep >= 2 ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
+          Loading Every Card
+        </div>
+
+        <div className={`mt-3 text-sm text-slate-300/82 transition-all duration-700 ease-out ${revealStep >= 3 ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
+          Preparing rivals, difficulty art, and full card images for this session.
+        </div>
+
+        <div className="relative mt-10 h-12 w-24">
+          <div className="absolute left-[12%] top-[26%] h-2.5 w-2.5 rounded-full border border-cyan-100/40 bg-cyan-200/10 bubble-rise-1" />
+          <div className="absolute left-[50%] top-[58%] h-1.5 w-1.5 rounded-full border border-cyan-100/35 bg-cyan-200/10 bubble-rise-2" />
+          <div className="absolute right-[14%] top-[36%] h-2 w-2 rounded-full border border-cyan-100/40 bg-cyan-200/10 bubble-rise-3" />
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 fish-bob">
+            <div className="relative">
+              <div className="h-8 w-14 rounded-[999px] border border-orange-100/30 bg-gradient-to-r from-orange-300 via-orange-400 to-orange-500 shadow-[0_0_24px_rgba(251,146,60,0.4)]" />
+              <div className="absolute left-[-8px] top-1/2 h-0 w-0 -translate-y-1/2 border-y-[9px] border-y-transparent border-r-[13px] border-r-orange-300/90" />
+              <div className="absolute right-2 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full border border-white/20 bg-slate-950/85" />
+              <div className="absolute right-[6px] top-[13px] h-1 w-1 rounded-full bg-white/90" />
+              <div className="absolute left-[16px] -top-2 h-4 w-4 rounded-t-[999px] rounded-b-sm rotate-[-18deg] bg-orange-400/90" />
+              <div className="absolute left-[18px] -bottom-2 h-4 w-4 rounded-b-[999px] rounded-t-sm rotate-[14deg] bg-orange-500/85" />
             </div>
           </div>
         </div>
@@ -462,6 +628,7 @@ const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false
 
   let dims = "w-[64px] h-[90px] sm:w-[80px] sm:h-[112px]"; 
   if (zone === 'hand') dims = "w-[72px] h-[100px] sm:w-[90px] sm:h-[126px]";
+  if (zone === 'explorer') dims = "w-full h-auto aspect-[5/7]";
   if (zone === 'stack') dims = "w-[86px] h-[120px] sm:w-[116px] sm:h-[162px]";
 
   let ringClass = '';
@@ -482,7 +649,7 @@ const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false
   } else if (subtleHighlight) {
       ringClass = 'ring-1 ring-amber-300/75 ring-offset-1 ring-offset-slate-950 shadow-[0_0_10px_rgba(251,191,36,0.18)]';
   } else {
-      if (zone === 'hand') interactionClass = disableHoverLift ? 'cursor-pointer' : 'cursor-pointer hover:-translate-y-4';
+      if (zone === 'hand' || zone === 'explorer') interactionClass = disableHoverLift ? 'cursor-pointer' : 'cursor-pointer hover:-translate-y-4';
       if (zone === 'board' && card.name === 'DandÃ¢n' && !card.tapped && !card.summoningSickness) interactionClass = 'cursor-pointer hover:ring-2 hover:ring-slate-400';
   }
   if (zone === 'board' && card.isLand) {
@@ -521,7 +688,7 @@ const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false
       )}
       <div className="absolute inset-0 bg-slate-900" />
       {hidden ? <CardBack /> : official ? (
-        <img src={card.fullImage} alt={card.name} className="absolute inset-0 w-full h-full object-cover rounded-md pointer-events-none" />
+        <img src={card.fullImage} alt={card.name} loading="eager" decoding="sync" className="absolute inset-0 w-full h-full object-cover rounded-md pointer-events-none" />
       ) : (
         <div className="absolute inset-0 border-[3px] border-slate-900 rounded-md flex flex-col bg-slate-500 p-[2px]">
           <div className={`absolute inset-0 opacity-90 ${card.isLand ? 'bg-sky-200' : 'bg-blue-600'}`}></div>
@@ -531,7 +698,7 @@ const Card = ({ card, onClick, onZoom, zone = 'hand', style = {}, hidden = false
               <span className="font-bold text-slate-800 text-[5px]">{card.manaCost}</span>
             </div>
             <div className="flex-1 bg-slate-800/80 border border-slate-500 rounded-sm overflow-hidden flex items-center justify-center relative shadow-inner">
-               <img src={card.image} alt="" className="absolute inset-0 w-full h-full object-cover pointer-events-none" onError={(e) => { e.target.style.display = 'none'; }} />
+               <img src={card.image} alt="" loading="eager" decoding="sync" className="absolute inset-0 w-full h-full object-cover pointer-events-none" onError={(e) => { e.target.style.display = 'none'; }} />
             </div>
             <div className="bg-slate-100/95 border border-slate-400 rounded-sm px-1 shadow-sm h-2.5 flex items-center">
               <span className="font-bold text-slate-900 text-[4px] truncate">{card.type}</span>
@@ -780,7 +947,7 @@ const HomeActionButton = ({ label, onClick, className = '', labelClassName = '' 
   </button>
 );
 
-const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onSettings }) => {
+const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onContinue, canContinue, onSettings }) => {
   if (variantId === 'duel') {
     return (
       <div className="w-full max-w-4xl mx-auto grid gap-3">
@@ -792,13 +959,23 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onSettings }) => {
           indicatorClassName="border-slate-300/80 bg-slate-950/6 text-slate-950"
         />
         <div className="grid gap-3 sm:grid-cols-2">
-          <HomeActionButton
-            label="Quick Game"
-            onClick={onQuickGame}
-            className="min-h-[118px] rounded-[1.8rem] border border-slate-200/40 bg-white/72 px-5 py-5 text-left shadow-[0_20px_44px_rgba(15,23,42,0.18)] backdrop-blur-[2px]"
-            labelClassName="text-2xl sm:text-3xl font-semibold tracking-[-0.03em] text-slate-950"
-            indicatorClassName="border-rose-300/50 bg-rose-50/80 text-rose-700"
-          />
+          <div className="grid gap-3">
+            <HomeActionButton
+              label="Quick Game"
+              onClick={onQuickGame}
+              className="min-h-[118px] rounded-[1.8rem] border border-slate-200/40 bg-white/72 px-5 py-5 text-left shadow-[0_20px_44px_rgba(15,23,42,0.18)] backdrop-blur-[2px]"
+              labelClassName="text-2xl sm:text-3xl font-semibold tracking-[-0.03em] text-slate-950"
+              indicatorClassName="border-rose-300/50 bg-rose-50/80 text-rose-700"
+            />
+            {canContinue && (
+              <HomeActionButton
+                label="Continue"
+                onClick={onContinue}
+                className="min-h-[96px] rounded-[1.8rem] border border-emerald-200/45 bg-emerald-50/78 px-5 py-5 text-left shadow-[0_20px_44px_rgba(15,23,42,0.16)] backdrop-blur-[2px]"
+                labelClassName="text-2xl sm:text-[2.45rem] font-semibold tracking-[-0.03em] text-slate-950"
+              />
+            )}
+          </div>
           <HomeActionButton
             label="Settings"
             onClick={onSettings}
@@ -828,6 +1005,14 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onSettings }) => {
           labelClassName="text-2xl sm:text-[2rem] font-semibold tracking-[-0.03em] text-slate-950"
           indicatorClassName="border-rose-300/60 bg-rose-50 text-rose-700"
         />
+        {canContinue && (
+          <HomeActionButton
+            label="Continue"
+            onClick={onContinue}
+            className="rounded-[1.55rem] border border-emerald-300/70 bg-emerald-50/88 px-5 py-5 text-left shadow-[0_18px_38px_rgba(15,23,42,0.18)] backdrop-blur-[2px]"
+            labelClassName="text-2xl sm:text-[2rem] font-semibold tracking-[-0.03em] text-slate-950"
+          />
+        )}
         <HomeActionButton
           label="Settings"
           onClick={onSettings}
@@ -860,6 +1045,14 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onSettings }) => {
             labelClassName="text-2xl sm:text-[2.2rem] font-semibold tracking-[-0.03em] text-slate-950"
             indicatorClassName="border-rose-300/55 bg-rose-50/90 text-rose-700"
           />
+          {canContinue && (
+            <HomeActionButton
+              label="Continue"
+              onClick={onContinue}
+              className="rounded-[1.9rem] border border-emerald-200/50 bg-emerald-50/76 px-6 py-5 text-left shadow-[0_18px_36px_rgba(15,23,42,0.16)] backdrop-blur-[2px] sm:ml-12"
+              labelClassName="text-2xl sm:text-[2.2rem] font-semibold tracking-[-0.03em] text-slate-950"
+            />
+          )}
           <HomeActionButton
             label="Settings"
             onClick={onSettings}
@@ -889,6 +1082,14 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onSettings }) => {
           labelClassName="text-3xl sm:text-[3rem] font-semibold tracking-[-0.04em] text-slate-950"
           indicatorClassName="border-rose-300/60 bg-rose-50/95 text-rose-700"
         />
+        {canContinue && (
+          <HomeActionButton
+            label="Continue"
+            onClick={onContinue}
+            className="rounded-[2rem] border border-emerald-200/48 bg-emerald-50/78 px-6 py-6 text-left shadow-[0_20px_44px_rgba(15,23,42,0.16)] backdrop-blur-[2px]"
+            labelClassName="text-3xl sm:text-[3rem] font-semibold tracking-[-0.04em] text-slate-950"
+          />
+        )}
         <HomeActionButton
           label="Settings"
           onClick={onSettings}
@@ -914,6 +1115,14 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onSettings }) => {
         className="w-full max-w-[15.75rem] min-h-[56px] rounded-full bg-slate-800/44 p-0 shadow-[0_18px_36px_rgba(15,23,42,0.24)] hover:bg-slate-800/54"
         labelClassName="text-[1.2rem] sm:text-[1.32rem] tracking-[0.02em] text-white"
       />
+      {canContinue && (
+        <HomeActionButton
+          label="Continue"
+          onClick={onContinue}
+          className="w-full max-w-[15.75rem] min-h-[56px] rounded-full bg-emerald-900/42 p-0 shadow-[0_18px_36px_rgba(15,23,42,0.24)] hover:bg-emerald-900/52"
+          labelClassName="text-[1.2rem] sm:text-[1.32rem] tracking-[0.02em] text-white"
+        />
+      )}
       <HomeActionButton
         label="Settings"
         onClick={onSettings}
@@ -1146,12 +1355,17 @@ const LandingScreen = ({
   onToggleMuted,
   useOfficialCards,
   onToggleOfficialCards,
+  showLibrary,
+  onOpenLibrary,
+  onCloseLibrary,
   showQuickGameDialog,
   selectedDifficulty,
   menuAssetsReady,
   onQuickGameOpen,
   onQuickGameClose,
   onQuickGameStart,
+  canContinueGame,
+  onContinueGame,
   onAdventureOpen,
   adventureStageNumber,
   adventureWinsCount,
@@ -1340,6 +1554,8 @@ const LandingScreen = ({
                     variantId={homeVariant}
                     onAdventure={onAdventureOpen}
                     onQuickGame={onQuickGameOpen}
+                    onContinue={onContinueGame}
+                    canContinue={canContinueGame}
                     onSettings={onOpenSettings}
                   />
                 </div>
@@ -1368,6 +1584,14 @@ const LandingScreen = ({
           </div>
         )}
       </div>
+
+      {showLibrary && (
+        <CardCollectionOverlay
+          viewingZone="deck"
+          official={useOfficialCards}
+          onClose={onCloseLibrary}
+        />
+      )}
 
       {showMenuSettings && (
         <div className="absolute inset-0 z-20 flex items-start justify-center overflow-y-auto bg-[rgba(2,6,23,0.78)] p-4 backdrop-blur-sm sm:p-6">
@@ -1409,6 +1633,20 @@ const LandingScreen = ({
                 </div>
               </button>
               <button
+                onClick={() => {
+                  onCloseSettings();
+                  onOpenLibrary();
+                }}
+                className="w-full max-w-[15.75rem] min-h-[64px] rounded-full bg-slate-800/44 px-5 py-3 text-white shadow-[0_18px_36px_rgba(15,23,42,0.24)] transition-all hover:bg-slate-800/54"
+              >
+                <div className="flex flex-col items-center justify-center leading-none">
+                  <div className="font-arena-display text-[1.18rem] tracking-[0.04em]">Library</div>
+                  <div className="mt-2 text-[9px] uppercase tracking-[0.2em] text-slate-200/72">
+                    Open Decklist
+                  </div>
+                </div>
+              </button>
+              <button
                 onClick={onCloseSettings}
                 className="w-full max-w-[15.75rem] min-h-[56px] rounded-full bg-slate-800/44 px-5 py-3 text-white shadow-[0_18px_36px_rgba(15,23,42,0.24)] transition-all hover:bg-slate-800/54"
               >
@@ -1444,10 +1682,12 @@ export default function App() {
   const [showLog, setShowLog] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [muted, setMuted] = useState(false);
-  const [menuAssetsReady, setMenuAssetsReady] = useState(() => typeof window === 'undefined');
+  const [menuAssetsReady, setMenuAssetsReady] = useState(true);
+  const [hasSavedGame, setHasSavedGame] = useState(() => Boolean(loadCurrentGameSnapshot()));
   const [draggedIdx, setDraggedIdx] = useState(null);
   const [zoomedCard, setZoomedCard] = useState(null); 
   const [viewingZone, setViewingZone] = useState(null); 
+  const hadPersistableGameRef = useRef(false);
   const isAiMirror = state.gameMode === 'ai_vs_ai';
   const isAdventureMatch = state.gameMode === 'adventure';
   const difficultySpeed = AI_SPEED[state.difficulty] || AI_SPEED.medium;
@@ -1472,15 +1712,21 @@ export default function App() {
   useEffect(() => { AudioEngine.muted = muted; }, [muted]);
   useEffect(() => { saveRivalProgress(adventureWinsCount); }, [adventureWinsCount]);
   useEffect(() => {
-    if (menuAssetsReady) return;
-    let active = true;
-    preloadImageUrls(MENU_PRELOAD_URLS).then(() => {
-      if (active) setMenuAssetsReady(true);
-    });
-    return () => {
-      active = false;
-    };
-  }, [menuAssetsReady]);
+    const hasPersistableGame = state.started && !state.winner;
+
+    if (hasPersistableGame) {
+      saveCurrentGameSnapshot(state);
+      setHasSavedGame(true);
+    } else if (hadPersistableGameRef.current) {
+      clearCurrentGameSnapshot();
+      setHasSavedGame(false);
+    }
+
+    hadPersistableGameRef.current = hasPersistableGame;
+  }, [state]);
+  useEffect(() => {
+    preloadImageUrls(APP_PRELOAD_URLS);
+  }, []);
 
   const refreshLandingBackground = () => {
     setLandingBackground((previousBackground) => {
@@ -1594,6 +1840,25 @@ export default function App() {
     startMatch('quick', null, null, difficulty);
   };
 
+  const handleContinueSavedGame = () => {
+    const savedGame = loadCurrentGameSnapshot();
+    if (!savedGame) {
+      clearCurrentGameSnapshot();
+      setHasSavedGame(false);
+      return;
+    }
+
+    AudioEngine.init();
+    setShowQuickGameDialog(false);
+    setShowMenuSettings(false);
+    setShowRivalMenu(false);
+    setShowExitConfirm(false);
+    setShowLog(false);
+    setZoomedCard(null);
+    setViewingZone(null);
+    dispatch({ type: 'LOAD_SAVED_GAME', snapshot: savedGame });
+  };
+
   const resolveAiPendingAction = () => {
     if (!state.pendingAction) return;
     const pendingActor = state.pendingAction.player || 'player';
@@ -1695,6 +1960,10 @@ export default function App() {
 
   const adventurePathPoints = ADVENTURE_MAP_LAYOUT.map(({ left, top }) => `${left},${top}`).join(' ');
 
+  if (!menuAssetsReady) {
+    return <Preloader onComplete={() => setMenuAssetsReady(true)} />;
+  }
+
   if (!state.started) {
     return (
       <LandingScreen
@@ -1713,12 +1982,17 @@ export default function App() {
         onToggleMuted={() => setMuted(!muted)}
         useOfficialCards={useOfficialCards}
         onToggleOfficialCards={() => setUseOfficialCards(!useOfficialCards)}
+        showLibrary={viewingZone === 'deck'}
+        onOpenLibrary={() => setViewingZone('deck')}
+        onCloseLibrary={() => setViewingZone(null)}
         showQuickGameDialog={showQuickGameDialog}
         selectedDifficulty={selectedDifficulty}
         menuAssetsReady={menuAssetsReady}
         onQuickGameOpen={() => setShowQuickGameDialog(true)}
         onQuickGameClose={() => setShowQuickGameDialog(false)}
         onQuickGameStart={handleStartQuickGame}
+        canContinueGame={hasSavedGame}
+        onContinueGame={handleContinueSavedGame}
         onAdventureOpen={() => setMenuScreen('adventure')}
         adventureStageNumber={adventureStageNumber}
         adventureWinsCount={adventureWinsCount}
@@ -2262,34 +2536,13 @@ export default function App() {
       )}
 
       {/* DECK & GRAVEYARD EXPLORER OVERLAYS */}
-      {viewingZone && (
-         <div className="absolute inset-0 bg-black/95 z-[160] flex flex-col p-4 sm:p-8 backdrop-blur-lg animate-in fade-in duration-200">
-             <div className="flex justify-between items-center mb-6">
-                <h2 className="font-arena-display text-2xl font-bold tracking-[0.12em] uppercase text-white flex items-center gap-3">
-                   {viewingZone === 'deck' ? <Layers size={28} className="text-blue-400"/> : <Skull size={28} className="text-slate-400"/>} 
-                   {viewingZone === 'deck' ? `Library ${state.deck.length}/${SHARED_DECK_SIZE}` : 'Graveyard'}
-                </h2>
-                <button onClick={() => setViewingZone(null)} className="text-slate-400 hover:text-white p-2 bg-slate-800 rounded-full transition-colors"><X size={24}/></button>
-             </div>
-             
-             <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-wrap content-start justify-center gap-6 pb-20">
-                {getGroupedList(state[viewingZone]).map(group => (
-                   <div key={group.groupKey || `${group.name}-${group.count}`} className="relative group flex flex-col items-center animate-in zoom-in-95 duration-300">
-                      <Card card={group} official={useOfficialCards} onZoom={setZoomedCard} />
-                      <div className="absolute -top-3 -right-3 bg-blue-600 text-white font-black px-3 py-1 rounded-full border-2 border-slate-900 shadow-xl z-10 text-sm">
-                         x{group.count}
-                      </div>
-                   </div>
-                ))}
-                {state[viewingZone].length === 0 && (
-                   <div className="text-slate-500 text-2xl font-bold mt-32 flex flex-col items-center gap-4">
-                      {viewingZone === 'deck' ? <Layers size={48}/> : <Skull size={48}/>}
-                      Empty
-                   </div>
-                )}
-             </div>
-         </div>
-      )}
+      <CardCollectionOverlay
+        viewingZone={viewingZone}
+        cards={viewingZone ? state[viewingZone] : []}
+        official={useOfficialCards}
+        onClose={() => setViewingZone(null)}
+        onZoom={setZoomedCard}
+      />
 
       {/* TARGETING BANNER */}
       {state.pendingTargetSelection && (
@@ -2614,7 +2867,6 @@ export default function App() {
                          <Card 
                             card={c} zone="hand" official={useOfficialCards} onClick={(card) => handleCardClick(card, 'hand')} onZoom={setZoomedCard}
                             castable={!isAiMirror && (isCastable(c, state) || isCyclable(c, state))}
-                            style={{ filter: state.priority === 'player' || isAiMirror ? 'none' : 'brightness(0.6)' }}
                             draggable={true} onDragStart={() => setDraggedIdx(i)} onDragOver={(e) => { e.preventDefault(); }}
                             onDrop={() => {
                                if (draggedIdx !== null && draggedIdx !== i) dispatch({ type: 'REORDER_HAND', from: draggedIdx, to: i });
