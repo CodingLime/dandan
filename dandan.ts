@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useReducer } from 'react';
-import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeftRight, Target, Droplet, Shield, CloudRain, LogOut } from 'lucide-react';
+import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeft, ArrowLeftRight, Target, Droplet, Shield, CloudRain, LogOut } from 'lucide-react';
 import $ from 'jquery';
 import 'jquery.ripples';
 import { AI_CHARACTERS, AI_DIFFICULTIES, AI_DIFFICULTY_LABELS, AI_SPEED, CARDS, DANDAN_NAME, DEFAULT_AI_CHARACTER_ID, LAND_TYPE_CHOICES, PREDICT_OPTIONS, SHARED_DECK_SIZE, canDandanAttackDefender, checkHasActions, chooseAiAction, controlsIsland, createGameReducer, getAiCharacter, getAiPendingActions, getAiPolicyForActor, getAvailableMana, getManaPool, initialState, isActivatable, isCastable, isCyclable, isValidTarget } from './src/game/engine';
@@ -935,16 +935,22 @@ const AdventureMenuPanel = ({
   onStartAdventure,
   onRestartAdventure
 }) => (
-  <div className="grid gap-3 font-arena-display sm:gap-4 lg:grid-cols-[minmax(0,1.35fr)_300px]">
-    <div className="rounded-[1.6rem] bg-white/[0.08] p-3 shadow-[0_24px_54px_rgba(2,6,23,0.28)] backdrop-blur-xl sm:p-4">
-      <div className="mb-3 flex items-center justify-between gap-4 sm:mb-4">
-        <div className="text-xl sm:text-2xl text-white">Rival Route</div>
-        <div className="rounded-full bg-slate-950/64 px-3 py-1 text-sm uppercase tracking-[0.16em] text-slate-100 shadow-[0_10px_22px_rgba(15,23,42,0.24)]">
-          {Math.min(adventureWinsCount, ADVENTURE_ROUTE.length)}/{ADVENTURE_ROUTE.length}
+  <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto] gap-2.5 font-arena-display sm:gap-3 lg:grid-cols-[minmax(0,1.35fr)_300px] lg:grid-rows-1 lg:gap-4">
+    <div className="flex min-h-0 flex-col rounded-[8px] bg-white/[0.08] p-2.5 shadow-[0_24px_54px_rgba(2,6,23,0.28)] backdrop-blur-xl sm:p-4">
+      <div className="mb-2.5 flex items-end justify-between gap-4 sm:mb-4">
+        <div>
+          <div className="mb-0 text-[10px] uppercase tracking-[0.18em] text-slate-400/82">Adventure</div>
+          <div className="text-xl sm:text-2xl text-white">Rival Route</div>
+        </div>
+        <div className="text-right">
+          <div className="mb-0 text-[10px] uppercase tracking-[0.18em] text-slate-400/82">Progress</div>
+          <div className="rounded-full bg-slate-950/64 px-3 py-1 text-sm uppercase tracking-[0.16em] text-slate-100 shadow-[0_10px_22px_rgba(15,23,42,0.24)]">
+            {Math.min(adventureWinsCount, ADVENTURE_ROUTE.length)}/{ADVENTURE_ROUTE.length}
+          </div>
         </div>
       </div>
 
-      <div className="relative h-[250px] sm:h-[296px] lg:h-auto lg:aspect-[16/10] rounded-[1.45rem] overflow-hidden bg-[linear-gradient(180deg,rgba(15,23,42,0.18),rgba(15,23,42,0.36))] shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-xl">
+      <div className="relative min-h-0 h-full flex-1 rounded-[1.45rem] overflow-hidden bg-[linear-gradient(180deg,rgba(15,23,42,0.18),rgba(15,23,42,0.36))] shadow-[inset_0_1px_0_rgba(255,255,255,0.12)] backdrop-blur-xl lg:aspect-[16/10]">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.18),transparent_56%)]" />
         <div className="absolute inset-0 opacity-[0.08]" style={{ backgroundImage: 'linear-gradient(rgba(255,255,255,0.18) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.18) 1px, transparent 1px)', backgroundSize: '44px 44px' }} />
         <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full" preserveAspectRatio="none" aria-hidden="true">
@@ -967,7 +973,7 @@ const AdventureMenuPanel = ({
                 style={{ left: `${layout.left}%`, top: `${layout.top}%` }}
               >
                 <div className="flex flex-col items-center gap-1 sm:gap-2">
-                  <div className={`relative rounded-[1.15rem] p-[3px] shadow-[0_12px_28px_rgba(15,23,42,0.24)] backdrop-blur-md transition-all ${
+                  <div className={`relative rounded-[8px] p-[3px] shadow-[0_12px_28px_rgba(15,23,42,0.24)] backdrop-blur-xl transition-all ${
                     isCurrentStage
                       ? 'bg-white/28'
                       : isCleared
@@ -994,11 +1000,6 @@ const AdventureMenuPanel = ({
                     <div className={`text-[8px] sm:text-[10px] uppercase tracking-[0.12em] leading-tight ${isLocked ? 'text-slate-400/70' : 'text-white'}`}>
                       {character.name}
                     </div>
-                    {!isLocked && (
-                      <div className="text-[7px] sm:text-[9px] uppercase tracking-[0.14em] text-slate-300/80">
-                        {isCleared ? 'Cleared' : isCurrentStage ? 'Current' : 'Ahead'}
-                      </div>
-                    )}
                   </div>
                 </div>
               </div>
@@ -1008,13 +1009,13 @@ const AdventureMenuPanel = ({
       </div>
     </div>
 
-    <div className="rounded-[1.6rem] bg-white/[0.08] p-4 shadow-[0_24px_54px_rgba(2,6,23,0.28)] backdrop-blur-xl sm:p-5">
+    <div className="rounded-[1.6rem] bg-white/[0.08] p-3 shadow-[0_24px_54px_rgba(2,6,23,0.28)] backdrop-blur-xl sm:p-5">
       <div>
         <div className="flex items-center gap-3">
           <img
             src={getCharacterPortrait(nextAdventureCharacter.id, ADVENTURE_FIXED_DIFFICULTY)}
             alt={nextAdventureCharacter.name}
-            className="w-16 h-16 rounded-full object-cover shadow-[0_12px_26px_rgba(2,6,23,0.3)]"
+            className="h-14 w-14 rounded-full object-cover shadow-[0_12px_26px_rgba(2,6,23,0.3)] sm:h-16 sm:w-16"
           />
           <div className="min-w-0">
             <div className="text-[10px] uppercase tracking-[0.22em] text-slate-300">
@@ -1022,7 +1023,7 @@ const AdventureMenuPanel = ({
                 ? 'Adventure Complete'
                 : `${adventureStageNumber}/${ADVENTURE_ROUTE.length}`}
             </div>
-            <div className="text-lg text-white truncate">
+            <div className="text-base text-white truncate sm:text-lg">
               {isAdventureComplete ? 'Gauntlet Cleared' : nextAdventureCharacter.name}
             </div>
             <div className="text-[11px] uppercase tracking-[0.18em] text-slate-300/80">
@@ -1031,7 +1032,7 @@ const AdventureMenuPanel = ({
           </div>
         </div>
 
-        <div className="mt-4 sm:mt-5">
+        <div className="mt-3.5 sm:mt-5">
           <div className="flex items-center justify-between text-[10px] uppercase tracking-[0.18em] text-slate-300/80">
             <span>Progress</span>
             <span>{Math.min(adventureWinsCount, ADVENTURE_ROUTE.length)}/{ADVENTURE_ROUTE.length}</span>
@@ -1044,18 +1045,18 @@ const AdventureMenuPanel = ({
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 sm:mt-6">
-          <div className="grid grid-cols-[1fr_2fr] items-stretch gap-3">
+        <div className="mt-3.5 grid gap-2.5 sm:mt-6 sm:gap-3">
+          <div className="grid grid-cols-[56px_minmax(0,1fr)] items-stretch gap-3 sm:grid-cols-[60px_minmax(0,1fr)]">
             <button
               onClick={onBack}
-              className="flex min-h-[52px] h-full items-center justify-center gap-1.5 rounded-2xl bg-slate-950/92 px-3 py-3 font-arena-display text-[0.92rem] uppercase tracking-[0.08em] text-slate-100 shadow-[0_18px_34px_rgba(2,6,23,0.42)] transition-colors hover:bg-slate-900 sm:min-h-[54px] sm:px-4 sm:py-4 sm:text-sm"
+              aria-label="Back"
+              className="flex min-h-[52px] h-full items-center justify-center rounded-2xl bg-slate-950/92 px-0 py-3 text-slate-100 shadow-[0_18px_34px_rgba(2,6,23,0.42)] transition-colors hover:bg-slate-900 sm:min-h-[54px]"
             >
-              <span aria-hidden="true" className="text-[0.88rem] sm:text-[0.95rem]">&lt;-</span>
-              <span>Back</span>
+              <ArrowLeft size={18} strokeWidth={2.4} />
             </button>
             <button
               onClick={onStartAdventure}
-              className="flex min-h-[52px] h-full items-center justify-center rounded-2xl bg-slate-100 px-3 py-3 font-arena-display text-[1rem] uppercase tracking-[0.08em] text-slate-950 shadow-[0_14px_28px_rgba(255,255,255,0.14)] transition-colors hover:bg-white sm:min-h-[54px] sm:px-4 sm:py-4 sm:text-base"
+              className="flex min-h-[52px] h-full items-center justify-center rounded-2xl bg-[linear-gradient(180deg,#fb923c_0%,#f97316_52%,#ea580c_100%)] px-3 py-3 font-arena-display text-[1rem] uppercase tracking-[0.08em] text-white shadow-[0_16px_30px_rgba(234,88,12,0.3)] transition-all hover:brightness-[1.04] sm:min-h-[54px] sm:px-4 sm:py-4 sm:text-base"
             >
               {isAdventureComplete ? 'Restart Adventure' : adventureWinsCount > 0 ? 'Continue Adventure' : 'Play'}
             </button>
@@ -1075,13 +1076,10 @@ const AdventureMenuPanel = ({
 );
 
 const QuickGameDialog = ({ selectedDifficulty, onClose, onStart }) => (
-  <div className="absolute inset-0 z-20 bg-black/82 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
-    <div className="w-full max-w-xl rounded-[1.9rem] border border-slate-800 bg-slate-950 p-5 sm:p-6 text-left my-auto shadow-[0_30px_80px_rgba(0,0,0,0.5)]">
-      <div className="flex items-center justify-between mb-5">
+  <div onClick={onClose} className="absolute inset-0 z-20 bg-black/82 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
+    <div onClick={(event) => event.stopPropagation()} className="w-full max-w-xl rounded-[1.9rem] border border-slate-800 bg-slate-950 p-5 sm:p-6 text-left my-auto shadow-[0_30px_80px_rgba(0,0,0,0.5)]">
+      <div className="mb-5 text-center">
         <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white">Quick Game</h2>
-        <button onClick={onClose} className="rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-xs font-black uppercase tracking-[0.14em] text-slate-200 transition-colors hover:bg-slate-800">
-          Back
-        </button>
       </div>
       <div className="flex items-start justify-center gap-3 sm:gap-5">
         {AI_DIFFICULTIES.map((difficulty) => {
@@ -1255,6 +1253,7 @@ const LandingScreen = ({
     if (typeof window === 'undefined') return;
     if (typeof event.button === 'number' && event.button !== 0) return;
     if (menuScreen !== 'home') return;
+    if (event.target instanceof Element && event.target.closest('button, a, input, select, textarea, summary, [role="button"]')) return;
 
     const rippleSurface = landingRippleInstanceRef.current;
     const surface = landingRippleSurfaceRef.current;
@@ -1274,7 +1273,9 @@ const LandingScreen = ({
 
   return (
     <div
-      className="min-h-dvh bg-slate-950 text-slate-100 relative overflow-x-hidden overflow-y-auto"
+      className={`h-dvh bg-slate-950 text-slate-100 relative overflow-x-hidden ${
+        menuScreen === 'home' ? 'overflow-y-auto' : 'overflow-y-hidden'
+      }`}
       onPointerDownCapture={spawnLandingRipple}
       style={{
         paddingTop: 'max(1rem, env(safe-area-inset-top))',
@@ -1304,7 +1305,9 @@ const LandingScreen = ({
             : 'linear-gradient(180deg, rgba(2,6,23,0.48) 0%, rgba(2,6,23,0.72) 100%)'
         }}
       />
-      <div className="relative z-10 w-full max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      <div className={`relative z-10 mx-auto w-full max-w-6xl px-4 sm:px-6 ${
+        menuScreen === 'home' ? 'py-6 sm:py-8' : 'flex h-full flex-col py-3 sm:py-4'
+      }`}>
         {menuScreen === 'home' ? (
           <div className="mx-auto flex min-h-[calc(100dvh-5.5rem)] w-full max-w-md flex-col sm:min-h-[calc(100dvh-6.5rem)]">
             <div className="flex flex-1 flex-col items-center justify-center">
@@ -1348,18 +1351,20 @@ const LandingScreen = ({
             </div>
           </div>
         ) : (
-          <AdventureMenuPanel
-            adventurePathPoints={adventurePathPoints}
-            isAdventureComplete={isAdventureComplete}
-            nextAdventureCharacter={nextAdventureCharacter}
-            adventureProgressRatio={adventureProgressRatio}
-            adventureWinsCount={adventureWinsCount}
-            adventureStageNumber={adventureStageNumber}
-            availableAdventureStages={availableAdventureStages}
-            onBack={onBack}
-            onStartAdventure={onStartAdventure}
-            onRestartAdventure={onRestartAdventure}
-          />
+          <div className="flex min-h-0 flex-1 flex-col">
+            <AdventureMenuPanel
+              adventurePathPoints={adventurePathPoints}
+              isAdventureComplete={isAdventureComplete}
+              nextAdventureCharacter={nextAdventureCharacter}
+              adventureProgressRatio={adventureProgressRatio}
+              adventureWinsCount={adventureWinsCount}
+              adventureStageNumber={adventureStageNumber}
+              availableAdventureStages={availableAdventureStages}
+              onBack={onBack}
+              onStartAdventure={onStartAdventure}
+              onRestartAdventure={onRestartAdventure}
+            />
+          </div>
         )}
       </div>
 
