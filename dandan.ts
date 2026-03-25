@@ -573,7 +573,8 @@ const StackedLandGroup = ({ lands, official, state, zone, onZoom, onClick, activ
     const bActivatable = zone === 'board' && activatablePlayer ? isActivatable(b, state, activatablePlayer) : false;
     if (aActivatable !== bActivatable) return aActivatable ? 1 : -1;
     if (a.tapped !== b.tapped) return a.tapped ? -1 : 1;
-    return 0;
+    if (a.name !== b.name) return a.name.localeCompare(b.name);
+    return a.id.localeCompare(b.id);
   });
   const activatableLand = zone === 'board' && activatablePlayer
     ? orderedLands.find(land => isActivatable(land, state, activatablePlayer))
@@ -1645,6 +1646,7 @@ export default function App() {
 
   const groupLands = (board) => {
      const lands = board.filter(c => c.isLand);
+     if (lands.length >= 6) return [lands];
      const groups = {};
      lands.forEach(l => { groups[l.name] = groups[l.name] || []; groups[l.name].push(l); });
      return Object.values(groups);
