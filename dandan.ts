@@ -496,6 +496,11 @@ const resolvePlayerAvatarSrc = (profile) => (
     ? sanitizePeerAvatarSrc(profile.customAvatarSrc)
     : getPlayerAvatarPresetSrc(profile?.avatarPresetId || DEFAULT_PLAYER_AVATAR_PRESET_ID)
 );
+const getPlayerAvatarLabel = (avatarMode, avatarPresetId) => (
+  avatarMode === 'custom'
+    ? 'Custom Upload'
+    : PLAYER_AVATAR_PRESET_OPTIONS.find((avatar) => avatar.id === avatarPresetId)?.name || 'Dandan'
+);
 const APP_VERSION = 'v0.3.1';
 const ADVENTURE_ROUTE = ['shark', 'archivist', 'eel', 'siren', 'undertow', 'cartographer', 'piranha', 'hermit', 'tortoise', 'leviathan'];
 const ADVENTURE_MAP_LAYOUT = [
@@ -1795,9 +1800,7 @@ const AvatarSettingsSection = ({
         <div>
           <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Player Avatar</div>
           <div className="mt-1 font-arena-display text-xl tracking-[0.04em] text-white">
-            {avatarMode === 'custom'
-              ? 'Custom Upload'
-              : PLAYER_AVATAR_PRESET_OPTIONS.find((avatar) => avatar.id === avatarPresetId)?.name || 'Dandan'}
+            {getPlayerAvatarLabel(avatarMode, avatarPresetId)}
           </div>
           <div className="mt-1 text-sm text-slate-400">Use a rival portrait or upload your own square-cropped image.</div>
         </div>
@@ -1836,6 +1839,60 @@ const AvatarSettingsSection = ({
     )}
   </div>
 );
+
+const AvatarSettingsDialog = ({
+  open,
+  onClose,
+  avatarSrc,
+  avatarMode,
+  avatarPresetId,
+  avatarError,
+  onSelectPreset,
+  onUploadCustom,
+  onFileChange,
+  inputRef
+}) => {
+  if (!open) return null;
+
+  return (
+    <div onClick={onClose} className="absolute inset-0 z-40 flex items-start justify-center overflow-y-auto bg-black/82 p-4 sm:p-6">
+      <div onClick={(event) => event.stopPropagation()} className="my-auto w-full max-w-4xl rounded-[1.9rem] border border-slate-800 bg-slate-950 p-5 text-left shadow-[0_30px_80px_rgba(0,0,0,0.5)] sm:p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-3 text-cyan-200">
+              <img src={avatarSrc} alt="Your avatar" className="h-11 w-11 rounded-[1rem] object-cover border border-cyan-200/35" />
+              <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white">Player Avatar</h2>
+            </div>
+            <p className="mt-2 text-sm text-slate-400">Choose one of the rival portraits or upload your own image. This avatar is used in local matches, friend rooms, and arena games.</p>
+          </div>
+          <button onClick={onClose} className="flex h-10 w-10 items-center justify-center rounded-2xl border border-slate-700 bg-slate-900 text-slate-400 transition-all hover:bg-slate-800 hover:text-white">
+            <X size={18} />
+          </button>
+        </div>
+        <div className="mt-5">
+          <AvatarSettingsSection
+            avatarSrc={avatarSrc}
+            avatarMode={avatarMode}
+            avatarPresetId={avatarPresetId}
+            avatarError={avatarError}
+            onSelectPreset={onSelectPreset}
+            onUploadCustom={onUploadCustom}
+          />
+        </div>
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={onFileChange}
+        />
+        <button onClick={onClose} className="mt-5 w-full min-h-[52px] rounded-2xl border border-sky-200/70 bg-[#38bdf8] font-bold uppercase tracking-[0.04em] text-slate-950 shadow-[0_14px_28px_rgba(56,189,248,0.22)] transition-colors hover:bg-[#22c7ff]">
+          Done
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const OnlineModeDialog = ({ onClose, onChooseFriend, onChooseArena }) => (
   <div onClick={onClose} className="absolute inset-0 z-30 bg-black/82 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
@@ -2522,6 +2579,9 @@ const LandingScreen = ({
   playerAvatarPresetId,
   playerAvatarError,
   onSelectPlayerAvatarPreset,
+  showPlayerAvatarDialog,
+  onOpenPlayerAvatarDialog,
+  onClosePlayerAvatarDialog,
   onUploadPlayerAvatar,
   onPlayerAvatarFileChange,
   playerAvatarInputRef,
@@ -2837,14 +2897,20 @@ const LandingScreen = ({
                   </div>
                 </div>
               </button>
-              <AvatarSettingsSection
-                avatarSrc={playerAvatarSrc}
-                avatarMode={playerAvatarMode}
-                avatarPresetId={playerAvatarPresetId}
-                avatarError={playerAvatarError}
-                onSelectPreset={onSelectPlayerAvatarPreset}
-                onUploadCustom={onUploadPlayerAvatar}
-              />
+              <button
+                onClick={onOpenPlayerAvatarDialog}
+                className="w-full max-w-[18rem] rounded-[1.6rem] border border-white/10 bg-white/[0.045] px-4 py-3 text-white shadow-[0_18px_36px_rgba(15,23,42,0.24)] transition-all hover:bg-white/[0.07]"
+              >
+                <div className="flex items-center gap-3 text-left">
+                  <img src={playerAvatarSrc} alt="Player avatar" className="h-14 w-14 rounded-[1rem] object-cover border border-cyan-200/35 shadow-[0_12px_24px_rgba(2,6,23,0.26)]" />
+                  <div>
+                    <div className="font-arena-display text-[1.18rem] tracking-[0.04em]">Player Avatar</div>
+                    <div className="mt-1 text-[9px] uppercase tracking-[0.18em] text-slate-200/72">
+                      {getPlayerAvatarLabel(playerAvatarMode, playerAvatarPresetId)}
+                    </div>
+                  </div>
+                </div>
+              </button>
               <button
                 onClick={() => {
                   onCloseSettings();
@@ -2900,12 +2966,17 @@ const LandingScreen = ({
           </div>
         </div>
       )}
-      <input
-        ref={playerAvatarInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={onPlayerAvatarFileChange}
+      <AvatarSettingsDialog
+        open={showPlayerAvatarDialog}
+        onClose={onClosePlayerAvatarDialog}
+        avatarSrc={playerAvatarSrc}
+        avatarMode={playerAvatarMode}
+        avatarPresetId={playerAvatarPresetId}
+        avatarError={playerAvatarError}
+        onSelectPreset={onSelectPlayerAvatarPreset}
+        onUploadCustom={onUploadPlayerAvatar}
+        onFileChange={onPlayerAvatarFileChange}
+        inputRef={playerAvatarInputRef}
       />
 
       {showQuickGameDialog && <QuickGameDialog selectedDifficulty={selectedDifficulty} onClose={onQuickGameClose} onStart={onQuickGameStart} />}
@@ -2980,6 +3051,7 @@ export default function App() {
   const [adventureWinsCount, setAdventureWinsCount] = useState(() => loadRivalProgress().adventureWinsCount);
   const [useOfficialCards, setUseOfficialCards] = useState(true);
   const [showMenuSettings, setShowMenuSettings] = useState(false);
+  const [showPlayerAvatarDialog, setShowPlayerAvatarDialog] = useState(false);
   const [showRivalMenu, setShowRivalMenu] = useState(false);
   const [showQuickGameDialog, setShowQuickGameDialog] = useState(false);
   const [showOnlineModeDialog, setShowOnlineModeDialog] = useState(false);
@@ -4665,6 +4737,7 @@ export default function App() {
     disconnectOnlineMatchmaking({ keepDialog: false, preservePendingMatch: false });
     setShowQuickGameDialog(false);
     setShowMenuSettings(false);
+    setShowPlayerAvatarDialog(false);
     setShowRivalMenu(false);
     setShowExitConfirm(false);
     setDandanCastConfirm(null);
@@ -4803,6 +4876,7 @@ export default function App() {
     refreshLandingBackground();
     setShowQuickGameDialog(false);
     setShowMenuSettings(false);
+    setShowPlayerAvatarDialog(false);
     updatePeerUi((current) => ({ ...current, open: false, error: '', note: current.note }));
     disconnectOnlineMatchmaking({ keepDialog: false, preservePendingMatch: false });
     setShowExitConfirm(false);
@@ -4996,6 +5070,9 @@ export default function App() {
         playerAvatarPresetId={playerProfile.avatarPresetId}
         playerAvatarError={playerAvatarError}
         onSelectPlayerAvatarPreset={handleSelectPlayerAvatarPreset}
+        showPlayerAvatarDialog={showPlayerAvatarDialog}
+        onOpenPlayerAvatarDialog={() => setShowPlayerAvatarDialog(true)}
+        onClosePlayerAvatarDialog={() => setShowPlayerAvatarDialog(false)}
         onUploadPlayerAvatar={handleOpenAvatarFilePicker}
         onPlayerAvatarFileChange={handlePlayerAvatarFileChange}
         playerAvatarInputRef={playerAvatarInputRef}
@@ -5287,28 +5364,40 @@ export default function App() {
                   <span className="font-bold uppercase tracking-wider text-sm">Card Art</span>
                   <span className="flex items-center gap-2 text-sm"><ImageIcon size={16}/> {useOfficialCards ? 'SLD Art' : 'Proxy'}</span>
                 </button>
-                <AvatarSettingsSection
-                  avatarSrc={selectedPlayerAvatarSrc}
-                  avatarMode={playerProfile.avatarMode}
-                  avatarPresetId={playerProfile.avatarPresetId}
-                  avatarError={playerAvatarError}
-                  onSelectPreset={handleSelectPlayerAvatarPreset}
-                  onUploadCustom={handleOpenAvatarFilePicker}
-                />
+                <button
+                  onClick={() => setShowPlayerAvatarDialog(true)}
+                  className="w-full flex items-center justify-between gap-3 rounded-2xl border border-slate-700 bg-slate-950 px-4 py-3.5 text-slate-300 transition-all hover:bg-slate-900"
+                >
+                  <span className="flex items-center gap-3">
+                    <img src={selectedPlayerAvatarSrc} alt="Player avatar" className="h-11 w-11 rounded-[0.9rem] object-cover border border-cyan-200/35" />
+                    <span className="flex flex-col text-left">
+                      <span className="text-sm font-bold uppercase tracking-wider text-white">Player Avatar</span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-slate-400">
+                        {getPlayerAvatarLabel(playerProfile.avatarMode, playerProfile.avatarPresetId)}
+                      </span>
+                    </span>
+                  </span>
+                  <span className="text-xs font-bold uppercase tracking-[0.16em] text-cyan-200">Edit</span>
+                </button>
               </div>
-              <input
-                ref={playerAvatarInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handlePlayerAvatarFileChange}
-              />
               <button onClick={() => setShowMenuSettings(false)} className="w-full mt-5 py-3.5 bg-[#38bdf8] hover:bg-[#22c7ff] text-slate-950 font-bold tracking-[0.04em] uppercase rounded-2xl border border-sky-200/70 transition-colors shadow-[0_14px_28px_rgba(56,189,248,0.22)]">
                 Close
               </button>
             </div>
           </div>
         )}
+        <AvatarSettingsDialog
+          open={showPlayerAvatarDialog}
+          onClose={() => setShowPlayerAvatarDialog(false)}
+          avatarSrc={selectedPlayerAvatarSrc}
+          avatarMode={playerProfile.avatarMode}
+          avatarPresetId={playerProfile.avatarPresetId}
+          avatarError={playerAvatarError}
+          onSelectPreset={handleSelectPlayerAvatarPreset}
+          onUploadCustom={handleOpenAvatarFilePicker}
+          onFileChange={handlePlayerAvatarFileChange}
+          inputRef={playerAvatarInputRef}
+        />
         {showRivalMenu && (
           <div className="absolute inset-0 z-20 bg-black/72 backdrop-blur-md flex items-center justify-center p-4 sm:p-6">
             <div className="w-full max-w-3xl max-h-[88vh] overflow-hidden bg-slate-900/96 border border-white/12 rounded-[1.9rem] shadow-[0_26px_80px_rgba(2,6,23,0.72)] p-5 sm:p-6 text-left flex flex-col">
@@ -5454,6 +5543,7 @@ export default function App() {
     dandanCastConfirm ||
     dandanAttackBlockedDialog ||
     showMenuSettings ||
+    showPlayerAvatarDialog ||
     showRivalMenu ||
     state.pendingTargetSelection ||
     state.pendingAction ||
