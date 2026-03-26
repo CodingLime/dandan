@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useReducer } from 'react';
-import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeft, ArrowLeftRight, Target, Droplet, Shield, CloudRain, LogOut, Users, Share2, Copy, Wifi, WifiOff, RefreshCw, Link as LinkIcon } from 'lucide-react';
+import { Play, SkipForward, Activity, Layers, Skull, Image as ImageIcon, Settings, X, Sun, Moon, Swords, Volume2, VolumeX, ArrowLeft, ArrowLeftRight, Target, Droplet, Shield, CloudRain, LogOut, Users, Share2, Copy, Wifi, WifiOff, RefreshCw, Link as LinkIcon, Upload } from 'lucide-react';
 import { Peer } from 'peerjs';
 import $ from 'jquery';
 import 'jquery.ripples';
@@ -256,11 +256,11 @@ const POLICY_CONTENT = {
     sections: [
       {
         heading: 'What This Site Stores',
-        body: 'Forgetfull Fish stores a few gameplay and preference values in your browser so the app can work correctly. This includes your current saved game, your adventure progress, your preferred online nickname, and a visual preference for the landing background.'
+        body: 'Forgetfull Fish stores a few gameplay and preference values in your browser so the app can work correctly. This includes your current saved game, your adventure progress, your preferred online nickname, your selected player avatar or uploaded avatar image, and a visual preference for the landing background.'
       },
       {
         heading: 'What This Site Does Not Collect',
-        body: 'This site does not ask for your real name, email address, or account details. If you use online matchmaking, you can set a nickname that stays in your browser and is only used to coordinate peer-to-peer rooms. The app also does not use advertising trackers or analytics tools in the current version.'
+        body: 'This site does not ask for your real name, email address, or account details. If you use online matchmaking, you can set a nickname and avatar that stay in your browser and are only used to coordinate peer-to-peer rooms and identify you to other players. The app also does not use advertising trackers or analytics tools in the current version.'
       },
       {
         heading: 'Third-Party Requests',
@@ -282,7 +282,7 @@ const POLICY_CONTENT = {
       },
       {
         heading: 'Local Storage',
-        body: 'The app uses browser local storage for functional features: saving an unfinished match so you can continue later, storing adventure progress, remembering your online nickname, and remembering the landing background selection.'
+        body: 'The app uses browser local storage for functional features: saving an unfinished match so you can continue later, storing adventure progress, remembering your online nickname, remembering your selected avatar or uploaded avatar image, and remembering the landing background selection.'
       },
       {
         heading: 'Why It Is Used',
@@ -464,6 +464,38 @@ const CHARACTER_ART = {
   leviathan: leviathanPortrait
 };
 const getCharacterPortrait = (characterId, difficulty = 'medium') => CHARACTER_ART[characterId] || DIFFICULTY_ART[difficulty] || DIFFICULTY_ART.medium;
+const DEFAULT_PLAYER_AVATAR_PRESET_ID = 'dandan';
+const PLAYER_AVATAR_SIZE_PX = 192;
+const PLAYER_AVATAR_MAX_SOURCE_LENGTH = 160000;
+const PLAYER_AVATAR_PRESET_OPTIONS = [
+  {
+    id: DEFAULT_PLAYER_AVATAR_PRESET_ID,
+    name: 'Dandan',
+    src: CARDS.DANDAN.image
+  },
+  ...AI_CHARACTERS.map((character) => ({
+    id: character.id,
+    name: character.name,
+    src: getCharacterPortrait(character.id)
+  }))
+];
+const PLAYER_AVATAR_PRESET_IDS = new Set(PLAYER_AVATAR_PRESET_OPTIONS.map((avatar) => avatar.id));
+const sanitizePeerAvatarSrc = (value = '') => {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > PLAYER_AVATAR_MAX_SOURCE_LENGTH) return '';
+  return /^(data:image\/|https?:\/\/|\/)/i.test(trimmed) ? trimmed : '';
+};
+const getPlayerAvatarPresetSrc = (avatarPresetId = DEFAULT_PLAYER_AVATAR_PRESET_ID) => (
+  avatarPresetId === DEFAULT_PLAYER_AVATAR_PRESET_ID
+    ? CARDS.DANDAN.image
+    : getCharacterPortrait(avatarPresetId)
+);
+const resolvePlayerAvatarSrc = (profile) => (
+  profile?.avatarMode === 'custom' && profile?.customAvatarSrc
+    ? sanitizePeerAvatarSrc(profile.customAvatarSrc)
+    : getPlayerAvatarPresetSrc(profile?.avatarPresetId || DEFAULT_PLAYER_AVATAR_PRESET_ID)
+);
 const APP_VERSION = 'v0.3.1';
 const ADVENTURE_ROUTE = ['shark', 'archivist', 'eel', 'siren', 'undertow', 'cartographer', 'piranha', 'hermit', 'tortoise', 'leviathan'];
 const ADVENTURE_MAP_LAYOUT = [
@@ -610,24 +642,48 @@ const sanitizeOnlinePlayerName = (value = '') => value
   .replace(/\s+/g, ' ')
   .trim()
   .slice(0, ONLINE_NAME_MAX_LENGTH);
-const normalizeOnlinePlayerName = (value = '') => sanitizeOnlinePlayerName(value).toLowerCase().replace(/\s+/g, '-');
 const loadOnlineProfile = () => {
-  if (typeof window === 'undefined') return { playerName: '' };
+  if (typeof window === 'undefined') {
+    return {
+      playerName: '',
+      avatarMode: 'preset',
+      avatarPresetId: DEFAULT_PLAYER_AVATAR_PRESET_ID,
+      customAvatarSrc: ''
+    };
+  }
   try {
     const raw = window.localStorage.getItem(ONLINE_PROFILE_STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : null;
     return {
-      playerName: sanitizeOnlinePlayerName(parsed?.playerName || '')
+      playerName: sanitizeOnlinePlayerName(parsed?.playerName || ''),
+      avatarMode: parsed?.avatarMode === 'custom' && sanitizePeerAvatarSrc(parsed?.customAvatarSrc)
+        ? 'custom'
+        : 'preset',
+      avatarPresetId: PLAYER_AVATAR_PRESET_IDS.has(parsed?.avatarPresetId)
+        ? parsed.avatarPresetId
+        : DEFAULT_PLAYER_AVATAR_PRESET_ID,
+      customAvatarSrc: sanitizePeerAvatarSrc(parsed?.customAvatarSrc || '')
     };
   } catch (_error) {
-    return { playerName: '' };
+    return {
+      playerName: '',
+      avatarMode: 'preset',
+      avatarPresetId: DEFAULT_PLAYER_AVATAR_PRESET_ID,
+      customAvatarSrc: ''
+    };
   }
 };
 const saveOnlineProfile = (profile) => {
   if (typeof window === 'undefined') return;
   try {
+    const customAvatarSrc = sanitizePeerAvatarSrc(profile?.customAvatarSrc || '');
     window.localStorage.setItem(ONLINE_PROFILE_STORAGE_KEY, JSON.stringify({
-      playerName: sanitizeOnlinePlayerName(profile?.playerName || '')
+      playerName: sanitizeOnlinePlayerName(profile?.playerName || ''),
+      avatarMode: profile?.avatarMode === 'custom' && customAvatarSrc ? 'custom' : 'preset',
+      avatarPresetId: PLAYER_AVATAR_PRESET_IDS.has(profile?.avatarPresetId)
+        ? profile.avatarPresetId
+        : DEFAULT_PLAYER_AVATAR_PRESET_ID,
+      customAvatarSrc
     }));
   } catch (_error) {}
 };
@@ -652,47 +708,20 @@ const getOnlineBucketInfo = (now = Date.now()) => {
     })
   };
 };
-const compareOnlineMatchPlayers = (left, right) => (
-  left.normalizedName.localeCompare(right.normalizedName) ||
-  left.clientId.localeCompare(right.clientId)
-);
-const hashOnlineValue = async (value) => {
-  if (typeof crypto?.subtle?.digest === 'function') {
-    const encoded = new TextEncoder().encode(value);
-    const buffer = await crypto.subtle.digest('SHA-256', encoded);
-    return Array.from(new Uint8Array(buffer), (part) => part.toString(16).padStart(2, '0')).join('');
-  }
-
-  let hash = 2166136261;
-  for (const char of value) {
-    hash ^= char.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  const fallback = (hash >>> 0).toString(16).padStart(8, '0');
-  return fallback.repeat(8);
-};
-const buildOnlineMatchDescriptor = async ({ bucketStartMs, players }) => {
-  const orderedPlayers = players
-    .map((player) => {
-      const safeName = sanitizeOnlinePlayerName(player?.name || '') || `Player ${String(player?.clientId || '').slice(-4)}`;
-      return {
-        clientId: player?.clientId || generatePeerToken('online'),
-        name: safeName,
-        normalizedName: normalizeOnlinePlayerName(safeName) || String(player?.clientId || '').toLowerCase()
-      };
-    })
-    .sort(compareOnlineMatchPlayers);
-  const roomHash = await hashOnlineValue(`room|${bucketStartMs}|${orderedPlayers.map((player) => player.normalizedName).join('|')}`);
-  const tokenHash = await hashOnlineValue(`token|${bucketStartMs}|${orderedPlayers.map((player) => player.clientId).join('|')}|${orderedPlayers.map((player) => player.normalizedName).join('|')}`);
+const buildOnlineMatchDescriptor = ({ hostClientId, players }) => {
+  const roster = players.map((player) => ({
+    clientId: player?.clientId || generatePeerToken('online'),
+    name: sanitizeOnlinePlayerName(player?.name || '') || `Player ${String(player?.clientId || '').slice(-4)}`,
+    avatarSrc: sanitizePeerAvatarSrc(player?.avatarSrc || '')
+  }));
 
   return {
     type: 'online-match-found',
     protocol: ONLINE_PROTOCOL_VERSION,
-    bucketStartMs,
-    roomId: `${ONLINE_MATCH_PREFIX}-${roomHash.slice(0, 24)}`,
-    token: `key-${tokenHash.slice(0, 24)}`,
-    hostClientId: orderedPlayers[0]?.clientId || '',
-    players: orderedPlayers
+    roomId: generatePeerToken(ONLINE_MATCH_PREFIX),
+    token: generatePeerToken('key'),
+    hostClientId: hostClientId || roster[0]?.clientId || '',
+    players: roster
   };
 };
 const getOnlineMatchRole = (match, localClientId) => (
@@ -700,6 +729,9 @@ const getOnlineMatchRole = (match, localClientId) => (
 );
 const getOnlineMatchOpponent = (match, localClientId) => (
   match?.players?.find((player) => player.clientId !== localClientId)?.name || 'Opponent'
+);
+const getOnlineMatchOpponentAvatar = (match, localClientId) => (
+  sanitizePeerAvatarSrc(match?.players?.find((player) => player.clientId !== localClientId)?.avatarSrc || '')
 );
 const isUnavailablePeerIdError = (error) => error?.type === 'unavailable-id' || /taken|unavailable/i.test(error?.message || '');
 const getPeerGuestActionSeat = (state, action) => {
@@ -918,6 +950,54 @@ const clearCurrentGameSnapshot = () => {
     window.localStorage.removeItem(CURRENT_GAME_STORAGE_KEY);
   } catch (_error) {}
 };
+const prepareCustomAvatarFile = (file) => new Promise((resolve, reject) => {
+  if (!file) {
+    reject(new Error('Choose an image file first.'));
+    return;
+  }
+  if (!file.type?.startsWith('image/')) {
+    reject(new Error('Only image files can be used as avatars.'));
+    return;
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  const image = new window.Image();
+
+  image.onload = () => {
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = PLAYER_AVATAR_SIZE_PX;
+      canvas.height = PLAYER_AVATAR_SIZE_PX;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('Your browser could not process this image.'));
+        return;
+      }
+
+      const scale = Math.max(PLAYER_AVATAR_SIZE_PX / image.width, PLAYER_AVATAR_SIZE_PX / image.height);
+      const drawWidth = image.width * scale;
+      const drawHeight = image.height * scale;
+      const drawX = (PLAYER_AVATAR_SIZE_PX - drawWidth) / 2;
+      const drawY = (PLAYER_AVATAR_SIZE_PX - drawHeight) / 2;
+
+      context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.86);
+      URL.revokeObjectURL(objectUrl);
+      resolve(dataUrl);
+    } catch (_error) {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error('Unable to process that image. Try another file.'));
+    }
+  };
+
+  image.onerror = () => {
+    URL.revokeObjectURL(objectUrl);
+    reject(new Error('Unable to load that image file.'));
+  };
+
+  image.src = objectUrl;
+});
 const SESSION_PRELOADED_IMAGES = new Map();
 const SESSION_IMAGE_PRELOADS = new Map();
 const preloadSingleImage = (url) => {
@@ -1700,6 +1780,63 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onContin
   );
 };
 
+const AvatarSettingsSection = ({
+  avatarSrc,
+  avatarMode,
+  avatarPresetId,
+  avatarError,
+  onSelectPreset,
+  onUploadCustom
+}) => (
+  <div className="w-full rounded-[1.6rem] border border-white/10 bg-white/[0.045] p-4 text-left shadow-[0_18px_40px_rgba(2,6,23,0.24)]">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-4">
+        <img src={avatarSrc} alt="Player avatar" className="h-16 w-16 rounded-[1.2rem] object-cover border border-cyan-200/35 shadow-[0_12px_24px_rgba(2,6,23,0.26)]" />
+        <div>
+          <div className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-400">Player Avatar</div>
+          <div className="mt-1 font-arena-display text-xl tracking-[0.04em] text-white">
+            {avatarMode === 'custom'
+              ? 'Custom Upload'
+              : PLAYER_AVATAR_PRESET_OPTIONS.find((avatar) => avatar.id === avatarPresetId)?.name || 'Dandan'}
+          </div>
+          <div className="mt-1 text-sm text-slate-400">Use a rival portrait or upload your own square-cropped image.</div>
+        </div>
+      </div>
+      <button
+        onClick={onUploadCustom}
+        className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border border-cyan-300/45 bg-cyan-500/10 px-4 py-3 text-sm font-bold uppercase tracking-[0.08em] text-cyan-100 transition-colors hover:bg-cyan-500/16"
+      >
+        <Upload size={16} />
+        Load Your Own
+      </button>
+    </div>
+    <div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
+      {PLAYER_AVATAR_PRESET_OPTIONS.map((avatar) => {
+        const selected = avatarMode !== 'custom' && avatarPresetId === avatar.id;
+        return (
+          <button
+            key={avatar.id}
+            onClick={() => onSelectPreset(avatar.id)}
+            className={`rounded-[1.1rem] border px-2 py-2 text-center transition-all ${
+              selected
+                ? 'border-cyan-200/70 bg-cyan-400/16 text-cyan-50 shadow-[0_0_18px_rgba(34,211,238,0.14)]'
+                : 'border-white/10 bg-slate-900/72 text-slate-300 hover:bg-slate-900'
+            }`}
+          >
+            <img src={avatar.src} alt={avatar.name} className="mx-auto h-12 w-12 rounded-full object-cover border border-white/10" />
+            <div className="mt-2 text-[10px] font-black uppercase tracking-[0.12em] leading-4">{avatar.name}</div>
+          </button>
+        );
+      })}
+    </div>
+    {avatarError && (
+      <div className="mt-3 rounded-[1rem] border border-rose-400/35 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+        {avatarError}
+      </div>
+    )}
+  </div>
+);
+
 const OnlineModeDialog = ({ onClose, onChooseFriend, onChooseArena }) => (
   <div onClick={onClose} className="absolute inset-0 z-30 bg-black/82 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
     <div onClick={(event) => event.stopPropagation()} className="w-full max-w-lg rounded-[1.9rem] border border-slate-800 bg-slate-950 p-5 sm:p-6 text-left my-auto shadow-[0_30px_80px_rgba(0,0,0,0.5)]">
@@ -1716,7 +1853,18 @@ const OnlineModeDialog = ({ onClose, onChooseFriend, onChooseArena }) => (
         </button>
       </div>
 
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+      <div className="mt-5 grid gap-3">
+        <button
+          onClick={onChooseArena}
+          className="rounded-[1.7rem] border border-cyan-300/35 bg-cyan-500/10 px-5 py-6 text-left transition-colors hover:bg-cyan-500/16 sm:px-6 sm:py-7"
+        >
+          <div className="flex items-center gap-2 text-cyan-200">
+            <Wifi size={18} />
+            <span className="text-[10px] font-black uppercase tracking-[0.18em]">Shared Lobby</span>
+          </div>
+          <div className="mt-4 font-arena-display text-3xl tracking-[0.04em] text-white sm:text-[2.4rem]">Play In The Arena</div>
+          <p className="mt-3 max-w-xl text-sm leading-6 text-slate-300">Jump into the rotating six-hour arena, find another ready player, and open a fresh match room for that duel.</p>
+        </button>
         <button
           onClick={onChooseFriend}
           className="rounded-[1.5rem] border border-sky-300/35 bg-sky-500/10 px-5 py-5 text-left transition-colors hover:bg-sky-500/16"
@@ -1727,17 +1875,6 @@ const OnlineModeDialog = ({ onClose, onChooseFriend, onChooseArena }) => (
           </div>
           <div className="mt-3 font-arena-display text-2xl tracking-[0.04em] text-white">Play With Friend</div>
           <p className="mt-2 text-sm leading-6 text-slate-300">Create or join a direct invite room and start when both players are ready.</p>
-        </button>
-        <button
-          onClick={onChooseArena}
-          className="rounded-[1.5rem] border border-cyan-300/35 bg-cyan-500/10 px-5 py-5 text-left transition-colors hover:bg-cyan-500/16"
-        >
-          <div className="flex items-center gap-2 text-cyan-200">
-            <Wifi size={18} />
-            <span className="text-[10px] font-black uppercase tracking-[0.18em]">Shared Lobby</span>
-          </div>
-          <div className="mt-3 font-arena-display text-2xl tracking-[0.04em] text-white">Play In The Arena</div>
-          <p className="mt-2 text-sm leading-6 text-slate-300">Join the rotating six-hour arena lobby and match with another ready player.</p>
         </button>
       </div>
 
@@ -1967,6 +2104,7 @@ const PEER_STATUS_LABELS = {
 };
 
 const PlayWithFriendsDialog = ({
+  playerAvatarSrc,
   mode,
   role,
   status,
@@ -2000,6 +2138,7 @@ const PlayWithFriendsDialog = ({
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-cyan-200">
+              <img src={playerAvatarSrc} alt="Your avatar" className="h-9 w-9 rounded-full object-cover border border-cyan-200/35" />
               <Users size={18} />
               <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white">Play Online</h2>
             </div>
@@ -2135,6 +2274,7 @@ const ONLINE_MATCH_STATUS_LABELS = {
 };
 
 const PlayOnlineDialog = ({
+  playerAvatarSrc,
   playerName,
   status,
   error,
@@ -2162,10 +2302,11 @@ const PlayOnlineDialog = ({
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-cyan-200">
+              <img src={playerAvatarSrc} alt="Your avatar" className="h-9 w-9 rounded-full object-cover border border-cyan-200/35" />
               <Wifi size={18} />
               <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white">Play Online</h2>
             </div>
-            <p className="mt-2 text-sm text-slate-400">Join the shared six-hour lobby, announce you are ready, then hop into a deterministic PeerJS match room.</p>
+            <p className="mt-2 text-sm text-slate-400">Join the shared six-hour lobby, announce you are ready, then hop into a fresh PeerJS match room.</p>
           </div>
           <button onClick={isBusy ? onCancel : onClose} className="w-10 h-10 rounded-2xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all flex items-center justify-center">
             <X size={18} />
@@ -2193,7 +2334,7 @@ const PlayOnlineDialog = ({
             maxLength={ONLINE_NAME_MAX_LENGTH}
             className="w-full rounded-2xl border border-slate-700 bg-slate-900/88 px-4 py-3 text-slate-100 outline-none focus:border-cyan-300 disabled:cursor-not-allowed disabled:opacity-70"
           />
-          <div className="text-xs leading-5 text-slate-500">Stored only in this browser and used to derive the follow-up match room.</div>
+          <div className="text-xs leading-5 text-slate-500">Stored only in this browser and shared with the arena lobby while you match.</div>
         </label>
 
         <div className="mt-4 rounded-[1.4rem] border border-white/10 bg-white/[0.045] px-4 py-4">
@@ -2240,6 +2381,8 @@ const PlayOnlineDialog = ({
 const PeerStartControls = ({
   playerName,
   opponentName,
+  playerAvatarSrc,
+  opponentAvatarSrc,
   localReady,
   remoteReady,
   note,
@@ -2253,14 +2396,24 @@ const PeerStartControls = ({
   <div className="space-y-4">
     <div className="grid gap-2 sm:grid-cols-2">
       <div className={`rounded-[1.25rem] border px-4 py-3 text-left ${localReady ? 'border-emerald-300/40 bg-emerald-500/10 text-emerald-50' : 'border-slate-700 bg-slate-900/72 text-slate-200'}`}>
-        <div className="text-[10px] uppercase tracking-[0.18em] opacity-70">You</div>
-        <div className="mt-1 text-sm font-bold break-all">{playerName}</div>
-        <div className="mt-2 text-[11px] uppercase tracking-[0.16em]">{localReady ? 'Ready' : 'Waiting'}</div>
+        <div className="flex items-center gap-3">
+          <img src={playerAvatarSrc} alt={`${playerName} avatar`} className="h-12 w-12 rounded-full object-cover border border-emerald-200/30" />
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.18em] opacity-70">You</div>
+            <div className="mt-1 text-sm font-bold break-all">{playerName}</div>
+            <div className="mt-2 text-[11px] uppercase tracking-[0.16em]">{localReady ? 'Ready' : 'Waiting'}</div>
+          </div>
+        </div>
       </div>
       <div className={`rounded-[1.25rem] border px-4 py-3 text-left ${remoteReady ? 'border-cyan-300/40 bg-cyan-500/10 text-cyan-50' : 'border-slate-700 bg-slate-900/72 text-slate-200'}`}>
-        <div className="text-[10px] uppercase tracking-[0.18em] opacity-70">Opponent</div>
-        <div className="mt-1 text-sm font-bold break-all">{opponentName}</div>
-        <div className="mt-2 text-[11px] uppercase tracking-[0.16em]">{remoteReady ? 'Ready' : 'Waiting'}</div>
+        <div className="flex items-center gap-3">
+          <img src={opponentAvatarSrc} alt={`${opponentName} avatar`} className="h-12 w-12 rounded-full object-cover border border-cyan-200/30" />
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.18em] opacity-70">Opponent</div>
+            <div className="mt-1 text-sm font-bold break-all">{opponentName}</div>
+            <div className="mt-2 text-[11px] uppercase tracking-[0.16em]">{remoteReady ? 'Ready' : 'Waiting'}</div>
+          </div>
+        </div>
       </div>
     </div>
     {note && (
@@ -2290,6 +2443,8 @@ const PeerStartControls = ({
 const PeerRoomLobbyScreen = ({
   playerName,
   opponentName,
+  playerAvatarSrc,
+  opponentAvatarSrc,
   localReady,
   remoteReady,
   note,
@@ -2315,6 +2470,8 @@ const PeerRoomLobbyScreen = ({
       <PeerStartControls
         playerName={playerName}
         opponentName={opponentName}
+        playerAvatarSrc={playerAvatarSrc}
+        opponentAvatarSrc={opponentAvatarSrc}
         localReady={localReady}
         remoteReady={remoteReady}
         note={note}
@@ -2360,6 +2517,14 @@ const LandingScreen = ({
   onCloseOnlineModeDialog,
   onChooseOnlineFriend,
   onChooseOnlineArena,
+  playerAvatarSrc,
+  playerAvatarMode,
+  playerAvatarPresetId,
+  playerAvatarError,
+  onSelectPlayerAvatarPreset,
+  onUploadPlayerAvatar,
+  onPlayerAvatarFileChange,
+  playerAvatarInputRef,
   onFriendsClose,
   onOnlineOpen,
   onOnlineClose,
@@ -2635,7 +2800,7 @@ const LandingScreen = ({
 
       {showMenuSettings && (
         <div className="absolute inset-0 z-20 flex items-start justify-center overflow-y-auto bg-[rgba(2,6,23,0.78)] p-4 backdrop-blur-sm sm:p-6">
-          <div className="my-auto flex w-full max-w-md flex-col items-center text-center">
+          <div className="my-auto flex w-full max-w-3xl flex-col items-center text-center">
             <div className="mb-6">
               <h2
                 className="font-arena-display text-3xl sm:text-[2.2rem] tracking-[0.08em] text-white"
@@ -2672,6 +2837,14 @@ const LandingScreen = ({
                   </div>
                 </div>
               </button>
+              <AvatarSettingsSection
+                avatarSrc={playerAvatarSrc}
+                avatarMode={playerAvatarMode}
+                avatarPresetId={playerAvatarPresetId}
+                avatarError={playerAvatarError}
+                onSelectPreset={onSelectPlayerAvatarPreset}
+                onUploadCustom={onUploadPlayerAvatar}
+              />
               <button
                 onClick={() => {
                   onCloseSettings();
@@ -2727,6 +2900,13 @@ const LandingScreen = ({
           </div>
         </div>
       )}
+      <input
+        ref={playerAvatarInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={onPlayerAvatarFileChange}
+      />
 
       {showQuickGameDialog && <QuickGameDialog selectedDifficulty={selectedDifficulty} onClose={onQuickGameClose} onStart={onQuickGameStart} />}
       {showOnlineModeDialog && (
@@ -2738,6 +2918,7 @@ const LandingScreen = ({
       )}
       {showOnlineDialog && (
         <PlayOnlineDialog
+          playerAvatarSrc={playerAvatarSrc}
           playerName={onlinePlayerName}
           status={onlineStatus}
           error={onlineError}
@@ -2754,6 +2935,7 @@ const LandingScreen = ({
       )}
       {showFriendsDialog && (
         <PlayWithFriendsDialog
+          playerAvatarSrc={playerAvatarSrc}
           mode={friendDialogMode}
           role={friendRole}
           status={friendStatus}
@@ -2787,6 +2969,7 @@ export default function App() {
   const peerSessionDraft = loadPeerSessionDraft();
   const restoredJoinRoomId = inviteParams.roomId || (peerSessionDraft?.role === 'guest' ? peerSessionDraft.roomId || '' : '');
   const restoredJoinToken = inviteParams.token || (peerSessionDraft?.role === 'guest' ? peerSessionDraft.token || '' : '');
+  const initialOnlineProfileRef = useRef(loadOnlineProfile());
   const [state, rawDispatch] = useReducer(gameReducer, initialState);
   const [menuMode, setMenuMode] = useState('adventure');
   const [menuScreen, setMenuScreen] = useState('home');
@@ -2807,6 +2990,12 @@ export default function App() {
   const [isBattlefieldPeekActive, setIsBattlefieldPeekActive] = useState(false);
   const [selectedStackEntryId, setSelectedStackEntryId] = useState(null);
   const [muted, setMuted] = useState(false);
+  const [playerProfile, setPlayerProfile] = useState(() => ({
+    avatarMode: initialOnlineProfileRef.current.avatarMode,
+    avatarPresetId: initialOnlineProfileRef.current.avatarPresetId,
+    customAvatarSrc: initialOnlineProfileRef.current.customAvatarSrc
+  }));
+  const [playerAvatarError, setPlayerAvatarError] = useState('');
   const [menuAssetsReady, setMenuAssetsReady] = useState(true);
   const [hasSavedGame, setHasSavedGame] = useState(() => Boolean(loadCurrentGameSnapshot()));
   const [draggedIdx, setDraggedIdx] = useState(null);
@@ -2821,6 +3010,8 @@ export default function App() {
     status: 'idle',
     playerDisplayName: '',
     opponentDisplayName: '',
+    playerAvatarSrc: '',
+    opponentAvatarSrc: '',
     localReady: false,
     remoteReady: false,
     roomId: '',
@@ -2836,7 +3027,7 @@ export default function App() {
         : ''
   }));
   const [onlineUi, setOnlineUi] = useState(() => {
-    const profile = loadOnlineProfile();
+    const profile = initialOnlineProfileRef.current;
     return {
       open: false,
       playerName: profile.playerName,
@@ -2856,6 +3047,7 @@ export default function App() {
   const peerDisconnectTimerRef = useRef(null);
   const peerStartLaunchRef = useRef(false);
   const peerClockRef = useRef(null);
+  const playerAvatarInputRef = useRef(null);
   const onlineLobbyPeerRef = useRef(null);
   const onlineLobbyConnectionRef = useRef(null);
   const onlineLaunchTimerRef = useRef(null);
@@ -2921,6 +3113,9 @@ export default function App() {
   const isOpponentClockRunning = peerClock?.runningFor === 'ai';
   const peerOpponentName = peerUi.opponentDisplayName || 'Friend';
   const peerPlayerName = peerUi.playerDisplayName || 'You';
+  const selectedPlayerAvatarSrc = resolvePlayerAvatarSrc(playerProfile);
+  const peerPlayerAvatarSrc = peerUi.playerAvatarSrc || selectedPlayerAvatarSrc;
+  const peerOpponentAvatarSrc = peerUi.opponentAvatarSrc || CARDS.DANDAN.image;
   const canPressPeerStartGame = peerUi.status === 'connected' && !peerUi.localReady;
   const peerStartButtonLabel = peerUi.status !== 'connected'
     ? 'Reconnecting...'
@@ -2953,7 +3148,7 @@ export default function App() {
       : null;
   const currentPlayerAiCharacter = state.started ? getAiCharacter(state.playerAiCharacterId || null) : null;
   const opponentAvatarSrc = isPeerMatch
-    ? CARDS.DANDAN.image
+    ? peerOpponentAvatarSrc
     : currentOpponentCharacter
     ? getCharacterPortrait(currentOpponentCharacter.id, state.difficulty || selectedDifficulty)
     : (DIFFICULTY_ART[state.difficulty || selectedDifficulty] || DIFFICULTY_ART.medium);
@@ -2971,7 +3166,14 @@ export default function App() {
   }, [peerClock]);
   useEffect(() => { AudioEngine.muted = muted; }, [muted]);
   useEffect(() => { saveRivalProgress(adventureWinsCount); }, [adventureWinsCount]);
-  useEffect(() => { saveOnlineProfile({ playerName: onlineUi.playerName }); }, [onlineUi.playerName]);
+  useEffect(() => {
+    saveOnlineProfile({
+      playerName: onlineUi.playerName,
+      avatarMode: playerProfile.avatarMode,
+      avatarPresetId: playerProfile.avatarPresetId,
+      customAvatarSrc: playerProfile.customAvatarSrc
+    });
+  }, [onlineUi.playerName, playerProfile.avatarMode, playerProfile.avatarPresetId, playerProfile.customAvatarSrc]);
   useEffect(() => {
     if (!isPeekableDialogVisible && isBattlefieldPeekActive) {
       setIsBattlefieldPeekActive(false);
@@ -3097,7 +3299,7 @@ export default function App() {
     if (!peerUi.joinRoomId || !peerUi.joinToken) return;
     autoJoinInviteRef.current = false;
     const timer = window.setTimeout(() => {
-      startGuestConnection();
+      connectPrivateFriendInvite();
     }, 120);
     return () => window.clearTimeout(timer);
   }, [peerUi.open, peerUi.mode, peerUi.role, peerUi.status, peerUi.joinRoomId, peerUi.joinToken]);
@@ -3208,7 +3410,9 @@ export default function App() {
             connection.send({
               type: 'peer-start-game',
               protocol: PEER_PROTOCOL_VERSION,
-              difficulty: nextDifficulty
+              difficulty: nextDifficulty,
+              playerName: peerUi.playerDisplayName || '',
+              playerAvatarSrc: peerUi.playerAvatarSrc || selectedPlayerAvatarSrc
             });
           } catch (_error) {}
         }
@@ -3266,6 +3470,8 @@ export default function App() {
       protocol: PEER_PROTOCOL_VERSION,
       state: buildPeerGuestViewState(sourceState),
       clock: buildPeerGuestClockState(peerClockRef.current),
+      playerName: peerUi.playerDisplayName || '',
+      playerAvatarSrc: peerUi.playerAvatarSrc || selectedPlayerAvatarSrc,
       sentAt: Date.now()
     });
   };
@@ -3306,6 +3512,8 @@ export default function App() {
       status: 'idle',
       playerDisplayName: '',
       opponentDisplayName: '',
+      playerAvatarSrc: '',
+      opponentAvatarSrc: '',
       localReady: false,
       remoteReady: false,
       roomId: '',
@@ -3420,6 +3628,8 @@ export default function App() {
         openDialog: false,
         playerDisplayName: matchSession.playerName || '',
         opponentDisplayName: matchSession.opponentName || '',
+        playerAvatarSrc: matchSession.playerAvatarSrc || selectedPlayerAvatarSrc,
+        opponentAvatarSrc: matchSession.opponentAvatarSrc || '',
         noteOverrides: {
           creating: `Matched with ${matchSession.opponentName}. Opening the match room...`,
           waiting: `Match room ready. Waiting for ${matchSession.opponentName}...`,
@@ -3436,6 +3646,8 @@ export default function App() {
       openDialog: false,
       playerDisplayName: matchSession.playerName || '',
       opponentDisplayName: matchSession.opponentName || '',
+      playerAvatarSrc: matchSession.playerAvatarSrc || selectedPlayerAvatarSrc,
+      opponentAvatarSrc: matchSession.opponentAvatarSrc || '',
       noteOverrides: {
         connecting: `Matched with ${matchSession.opponentName}. Joining the match room...`,
         reconnecting: 'Signal lost. Retrying the matched room...',
@@ -3469,6 +3681,7 @@ export default function App() {
           protocol: ONLINE_PROTOCOL_VERSION,
           clientId,
           playerName: safeName,
+          avatarSrc: selectedPlayerAvatarSrc,
           type: 'online-lobby'
         }
       });
@@ -3487,6 +3700,7 @@ export default function App() {
           protocol: ONLINE_PROTOCOL_VERSION,
           clientId,
           playerName: safeName,
+          avatarSrc: selectedPlayerAvatarSrc,
           bucketStartMs: bucketInfo.bucketStartMs
         });
       });
@@ -3510,6 +3724,8 @@ export default function App() {
             role: getOnlineMatchRole(message, clientId),
             playerName: safeName,
             opponentName: getOnlineMatchOpponent(message, clientId),
+            playerAvatarSrc: selectedPlayerAvatarSrc,
+            opponentAvatarSrc: getOnlineMatchOpponentAvatar(message, clientId),
             bucketLabel: bucketInfo.bucketLabel
           };
           onlineMatchRef.current = {
@@ -3575,12 +3791,17 @@ export default function App() {
         open: true,
         status: 'error',
         error: 'Enter a nickname before starting matchmaking.',
-        note: 'Your nickname is used to derive the follow-up match room.'
+        note: 'Your nickname is shared with the arena lobby while you match.'
       });
       return;
     }
 
-    saveOnlineProfile({ playerName: safeName });
+    saveOnlineProfile({
+      playerName: safeName,
+      avatarMode: playerProfile.avatarMode,
+      avatarPresetId: playerProfile.avatarPresetId,
+      customAvatarSrc: playerProfile.customAvatarSrc
+    });
     clearOnlineMatchmakingResources({ preservePendingMatch: false });
 
     const bucketInfo = getOnlineBucketInfo();
@@ -3645,10 +3866,11 @@ export default function App() {
 
       onlineLobbyConnectionRef.current = connection;
 
-      connection.on('data', async (message) => {
+      connection.on('data', (message) => {
         if (!message || typeof message !== 'object' || message.protocol !== ONLINE_PROTOCOL_VERSION || message.type !== 'online-ready') return;
         const guestName = sanitizeOnlinePlayerName(message.playerName || connection.metadata?.playerName || '');
         const guestClientId = message.clientId || connection.metadata?.clientId || connection.peer;
+        const guestAvatarSrc = sanitizePeerAvatarSrc(message.avatarSrc || connection.metadata?.avatarSrc || '');
 
         if (!guestName || !guestClientId) {
           sendOnlineLobbyMessageAndClose(connection, {
@@ -3660,16 +3882,18 @@ export default function App() {
           return;
         }
 
-        const descriptor = await buildOnlineMatchDescriptor({
-          bucketStartMs: bucketInfo.bucketStartMs,
+        const descriptor = buildOnlineMatchDescriptor({
+          hostClientId: bucketInfo.lobbyRoomId,
           players: [
             {
               clientId: bucketInfo.lobbyRoomId,
-              name: safeName
+              name: safeName,
+              avatarSrc: selectedPlayerAvatarSrc
             },
             {
               clientId: guestClientId,
-              name: guestName
+              name: guestName,
+              avatarSrc: guestAvatarSrc
             }
           ]
         });
@@ -3682,6 +3906,8 @@ export default function App() {
           role: getOnlineMatchRole(descriptor, bucketInfo.lobbyRoomId),
           playerName: safeName,
           opponentName: getOnlineMatchOpponent(descriptor, bucketInfo.lobbyRoomId),
+          playerAvatarSrc: selectedPlayerAvatarSrc,
+          opponentAvatarSrc: getOnlineMatchOpponentAvatar(descriptor, bucketInfo.lobbyRoomId),
           bucketLabel: bucketInfo.bucketLabel
         };
 
@@ -3787,7 +4013,9 @@ export default function App() {
         type: 'hello',
         protocol: PEER_PROTOCOL_VERSION,
         token,
-        clientId
+        clientId,
+        playerName: peerUi.playerDisplayName || sanitizeOnlinePlayerName(onlineUi.playerName) || '',
+        playerAvatarSrc: peerUi.playerAvatarSrc || selectedPlayerAvatarSrc
       });
     });
 
@@ -3810,6 +4038,8 @@ export default function App() {
           open: false,
           role: 'guest',
           status: 'connected',
+          opponentDisplayName: sanitizeOnlinePlayerName(message.playerName || current.opponentDisplayName || ''),
+          opponentAvatarSrc: sanitizePeerAvatarSrc(message.playerAvatarSrc || current.opponentAvatarSrc || ''),
           localReady: false,
           remoteReady: false,
           error: '',
@@ -3828,15 +4058,18 @@ export default function App() {
         rawDispatch({ type: 'HYDRATE_PEER_STATE', state: inflatePeerGuestViewState(message.state) });
         peerClockRef.current = message.clock || null;
         setPeerClock(message.clock || null);
-        updatePeerUi({
+        updatePeerUi((current) => ({
+          ...current,
           open: false,
           role: 'guest',
           status: 'connected',
+          opponentDisplayName: sanitizeOnlinePlayerName(message.playerName || current.opponentDisplayName || ''),
+          opponentAvatarSrc: sanitizePeerAvatarSrc(message.playerAvatarSrc || current.opponentAvatarSrc || ''),
           localReady: false,
           remoteReady: false,
           error: '',
           note: noteOverrides.connected || 'Friend match connected.'
-        });
+        }));
         savePeerSessionDraft({
           lastMode: 'join',
           role: 'guest',
@@ -3852,6 +4085,8 @@ export default function App() {
           open: false,
           role: 'guest',
           status: 'connected',
+          opponentDisplayName: sanitizeOnlinePlayerName(message.playerName || current.opponentDisplayName || ''),
+          opponentAvatarSrc: sanitizePeerAvatarSrc(message.playerAvatarSrc || current.opponentAvatarSrc || ''),
           localReady: false,
           remoteReady: false,
           error: '',
@@ -3961,6 +4196,8 @@ export default function App() {
     openDialog = true,
     playerDisplayName = '',
     opponentDisplayName = '',
+    playerAvatarSrc = '',
+    opponentAvatarSrc = '',
     noteOverrides = {}
   } = {}) => {
     disconnectPeerSession({ notifyRemote: false, resetGame: false, keepDialog: false, preserveJoinFields: true });
@@ -3987,6 +4224,8 @@ export default function App() {
       status: 'creating',
       playerDisplayName,
       opponentDisplayName,
+      playerAvatarSrc,
+      opponentAvatarSrc,
       localReady: false,
       remoteReady: false,
       roomId,
@@ -4057,13 +4296,22 @@ export default function App() {
           open: false,
           role: 'host',
           status: 'connected',
+          playerDisplayName,
+          opponentDisplayName,
+          playerAvatarSrc,
+          opponentAvatarSrc,
           localReady: false,
           remoteReady: false,
           error: '',
           note: noteOverrides.connected || 'Friend connected. Both players need to press Start Game.'
         });
         try {
-          connection.send({ type: 'session-accepted', protocol: PEER_PROTOCOL_VERSION });
+          connection.send({
+            type: 'session-accepted',
+            protocol: PEER_PROTOCOL_VERSION,
+            playerName: playerDisplayName || '',
+            playerAvatarSrc: playerAvatarSrc || selectedPlayerAvatarSrc
+          });
         } catch (_error) {}
         const currentState = latestStateRef.current;
         if (currentState.started && currentState.gameMode === 'peer' && !currentState.winner) {
@@ -4081,6 +4329,11 @@ export default function App() {
           return;
         }
         if (message.type === 'hello') {
+          updatePeerUi((current) => ({
+            ...current,
+            opponentDisplayName: sanitizeOnlinePlayerName(message.playerName || current.opponentDisplayName || ''),
+            opponentAvatarSrc: sanitizePeerAvatarSrc(message.playerAvatarSrc || current.opponentAvatarSrc || '')
+          }));
           pushPeerStateSync(latestStateRef.current);
           return;
         }
@@ -4180,6 +4433,8 @@ export default function App() {
     openDialog = true,
     playerDisplayName = '',
     opponentDisplayName = '',
+    playerAvatarSrc = '',
+    opponentAvatarSrc = '',
     noteOverrides = {}
   } = {}) => {
     const roomId = (roomIdOverride ?? peerUi.joinRoomId).trim();
@@ -4218,6 +4473,8 @@ export default function App() {
       status: 'connecting',
       playerDisplayName,
       opponentDisplayName,
+      playerAvatarSrc,
+      opponentAvatarSrc,
       localReady: false,
       remoteReady: false,
       roomId: '',
@@ -4442,12 +4699,63 @@ export default function App() {
     setShowOnlineModeDialog(true);
   };
 
+  const handleSelectPlayerAvatarPreset = (avatarPresetId) => {
+    setPlayerAvatarError('');
+    setPlayerProfile((current) => ({
+      ...current,
+      avatarMode: 'preset',
+      avatarPresetId,
+      customAvatarSrc: ''
+    }));
+  };
+
+  const handleOpenAvatarFilePicker = () => {
+    playerAvatarInputRef.current?.click();
+  };
+
+  const handlePlayerAvatarFileChange = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setPlayerAvatarError('');
+    try {
+      const customAvatarSrc = await prepareCustomAvatarFile(file);
+      setPlayerProfile((current) => ({
+        ...current,
+        avatarMode: 'custom',
+        customAvatarSrc
+      }));
+    } catch (error) {
+      setPlayerAvatarError(error?.message || 'Unable to use that image as an avatar.');
+    }
+  };
+
+  const getLocalPeerIdentity = () => ({
+    playerDisplayName: sanitizeOnlinePlayerName(onlineUi.playerName) || '',
+    playerAvatarSrc: selectedPlayerAvatarSrc
+  });
+
+  const openPrivateFriendInvite = (autoShare = true) => {
+    startHostInvite({
+      autoShare,
+      ...getLocalPeerIdentity()
+    });
+  };
+
+  const connectPrivateFriendInvite = () => {
+    startGuestConnection({
+      ...getLocalPeerIdentity()
+    });
+  };
+
   const handleOpenFriendDialog = () => {
     setShowOnlineModeDialog(false);
     updateOnlineUi((current) => ({ ...current, open: false }));
     updatePeerUi({
       open: true,
       mode: peerUi.joinRoomId && peerUi.joinToken ? 'join' : 'host',
+      playerAvatarSrc: selectedPlayerAvatarSrc,
       error: '',
       note: peerUi.note
     });
@@ -4643,6 +4951,8 @@ export default function App() {
       <PeerRoomLobbyScreen
         playerName={peerPlayerName}
         opponentName={peerOpponentName}
+        playerAvatarSrc={peerPlayerAvatarSrc}
+        opponentAvatarSrc={peerOpponentAvatarSrc}
         localReady={peerUi.localReady}
         remoteReady={peerUi.remoteReady}
         note={peerUi.note}
@@ -4681,6 +4991,14 @@ export default function App() {
         showOnlineModeDialog={showOnlineModeDialog}
         showFriendsDialog={peerUi.open}
         showOnlineDialog={onlineUi.open}
+        playerAvatarSrc={selectedPlayerAvatarSrc}
+        playerAvatarMode={playerProfile.avatarMode}
+        playerAvatarPresetId={playerProfile.avatarPresetId}
+        playerAvatarError={playerAvatarError}
+        onSelectPlayerAvatarPreset={handleSelectPlayerAvatarPreset}
+        onUploadPlayerAvatar={handleOpenAvatarFilePicker}
+        onPlayerAvatarFileChange={handlePlayerAvatarFileChange}
+        playerAvatarInputRef={playerAvatarInputRef}
         selectedDifficulty={selectedDifficulty}
         menuAssetsReady={menuAssetsReady}
         onQuickGameOpen={() => setShowQuickGameDialog(true)}
@@ -4712,19 +5030,19 @@ export default function App() {
         friendNote={peerUi.note}
         canShareFriendInvite={canShareFriendInvite}
         onSelectFriendMode={(mode) => updatePeerUi({ mode, error: '', note: mode === 'host' ? 'Create an invite and share it with your friend.' : peerUi.note || 'Paste the invite details to join.' })}
-        onCreateFriendInvite={() => startHostInvite({ autoShare: true })}
+        onCreateFriendInvite={() => openPrivateFriendInvite(true)}
         onShareFriendInvite={shareCurrentInvite}
         onCopyFriendInvite={copyCurrentInvite}
         onFriendJoinRoomIdChange={(value) => updatePeerUi({ joinRoomId: value, error: '' })}
         onFriendJoinTokenChange={(value) => updatePeerUi({ joinToken: value, error: '' })}
-        onConnectFriendInvite={startGuestConnection}
+        onConnectFriendInvite={connectPrivateFriendInvite}
         onDisconnectFriendInvite={() => disconnectPeerSession({ notifyRemote: peerUi.role === 'host', resetGame: state.started && state.gameMode === 'peer', keepDialog: true, note: peerUi.role === 'host' ? 'Room closed.' : 'Disconnected from the room.' })}
         onRetryFriendInvite={() => {
           if (peerUi.mode === 'host') {
-            startHostInvite({ autoShare: false });
+            openPrivateFriendInvite(false);
             return;
           }
-          startGuestConnection();
+          connectPrivateFriendInvite();
         }}
         onlinePlayerName={onlineUi.playerName}
         onlineStatus={onlineUi.status}
@@ -4953,7 +5271,7 @@ export default function App() {
         </div>
         {showMenuSettings && (
           <div className="absolute inset-0 z-20 bg-black/72 backdrop-blur-md flex items-center justify-center p-4 sm:p-6">
-            <div className="w-full max-w-sm bg-slate-900/96 border border-white/12 rounded-[1.9rem] shadow-[0_26px_80px_rgba(2,6,23,0.72)] p-5 sm:p-6 text-left">
+            <div className="w-full max-w-3xl max-h-[88vh] overflow-y-auto custom-scrollbar bg-slate-900/96 border border-white/12 rounded-[1.9rem] shadow-[0_26px_80px_rgba(2,6,23,0.72)] p-5 sm:p-6 text-left">
               <div className="flex items-center justify-between mb-5">
                 <h2 className="text-lg font-black text-cyan-100 tracking-[0.22em] uppercase">Settings</h2>
                 <button onClick={() => setShowMenuSettings(false)} className="w-10 h-10 rounded-2xl bg-slate-950 border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all flex items-center justify-center">
@@ -4969,7 +5287,22 @@ export default function App() {
                   <span className="font-bold uppercase tracking-wider text-sm">Card Art</span>
                   <span className="flex items-center gap-2 text-sm"><ImageIcon size={16}/> {useOfficialCards ? 'SLD Art' : 'Proxy'}</span>
                 </button>
+                <AvatarSettingsSection
+                  avatarSrc={selectedPlayerAvatarSrc}
+                  avatarMode={playerProfile.avatarMode}
+                  avatarPresetId={playerProfile.avatarPresetId}
+                  avatarError={playerAvatarError}
+                  onSelectPreset={handleSelectPlayerAvatarPreset}
+                  onUploadCustom={handleOpenAvatarFilePicker}
+                />
               </div>
+              <input
+                ref={playerAvatarInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handlePlayerAvatarFileChange}
+              />
               <button onClick={() => setShowMenuSettings(false)} className="w-full mt-5 py-3.5 bg-[#38bdf8] hover:bg-[#22c7ff] text-slate-950 font-bold tracking-[0.04em] uppercase rounded-2xl border border-sky-200/70 transition-colors shadow-[0_14px_28px_rgba(56,189,248,0.22)]">
                 Close
               </button>
@@ -5088,6 +5421,8 @@ export default function App() {
               <PeerStartControls
                 playerName={peerPlayerName}
                 opponentName={peerOpponentName}
+                playerAvatarSrc={peerPlayerAvatarSrc}
+                opponentAvatarSrc={peerOpponentAvatarSrc}
                 localReady={peerUi.localReady}
                 remoteReady={peerUi.remoteReady}
                 note={peerUi.note}
@@ -5710,7 +6045,7 @@ export default function App() {
            {/* Player Avatar Badge */}
            <div className="absolute top-2 left-2 flex items-center gap-3 z-30 bg-slate-900/90 pr-4 pl-1 py-1 rounded-full border border-slate-700 shadow-xl">
               <div className="relative">
-                 <img src={CARDS.DANDAN.image} className="w-10 h-10 rounded-full object-cover border-2 border-blue-600" alt="Player Avatar" />
+                 <img src={isPeerMatch ? peerPlayerAvatarSrc : selectedPlayerAvatarSrc} className="w-10 h-10 rounded-full object-cover border-2 border-blue-600" alt="Player Avatar" />
                  <div className="absolute -bottom-1 -right-1 bg-blue-900 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full border border-blue-400 shadow-lg">{state.player.life}</div>
               </div>
               <div className="flex flex-col">
