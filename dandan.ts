@@ -1484,7 +1484,7 @@ const HomeActionButton = ({ label, onClick, className = '', labelClassName = '' 
   </button>
 );
 
-const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onFriends, onContinue, canContinue, onSettings }) => {
+const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onContinue, canContinue, onSettings }) => {
   if (variantId === 'duel') {
     return (
       <div className="w-full max-w-4xl mx-auto grid gap-3">
@@ -1503,12 +1503,6 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onFriend
               className="min-h-[118px] rounded-[1.8rem] border border-slate-200/40 bg-white/72 px-5 py-5 text-left shadow-[0_20px_44px_rgba(15,23,42,0.18)] backdrop-blur-[2px]"
               labelClassName="text-2xl sm:text-3xl font-semibold tracking-[-0.03em] text-slate-950"
               indicatorClassName="border-rose-300/50 bg-rose-50/80 text-rose-700"
-            />
-            <HomeActionButton
-              label="Play With Friends"
-              onClick={onFriends}
-              className="min-h-[96px] rounded-[1.8rem] border border-sky-200/45 bg-sky-50/78 px-5 py-5 text-left shadow-[0_20px_44px_rgba(15,23,42,0.16)] backdrop-blur-[2px]"
-              labelClassName="text-xl sm:text-[2rem] font-semibold tracking-[-0.03em] text-slate-950"
             />
             <HomeActionButton
               label="Play Online"
@@ -1553,12 +1547,6 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onFriend
           className="rounded-[1.55rem] border border-slate-300/70 bg-slate-50/88 px-5 py-5 text-left shadow-[0_18px_38px_rgba(15,23,42,0.2)] backdrop-blur-[2px]"
           labelClassName="text-2xl sm:text-[2rem] font-semibold tracking-[-0.03em] text-slate-950"
           indicatorClassName="border-rose-300/60 bg-rose-50 text-rose-700"
-        />
-        <HomeActionButton
-          label="Play With Friends"
-          onClick={onFriends}
-          className="rounded-[1.55rem] border border-sky-300/70 bg-sky-50/88 px-5 py-5 text-left shadow-[0_18px_38px_rgba(15,23,42,0.18)] backdrop-blur-[2px]"
-          labelClassName="text-2xl sm:text-[2rem] font-semibold tracking-[-0.03em] text-slate-950"
         />
         <HomeActionButton
           label="Play Online"
@@ -1607,12 +1595,6 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onFriend
             indicatorClassName="border-rose-300/55 bg-rose-50/90 text-rose-700"
           />
           <HomeActionButton
-            label="Play With Friends"
-            onClick={onFriends}
-            className="rounded-[1.9rem] border border-sky-200/50 bg-sky-50/76 px-6 py-5 text-left shadow-[0_18px_36px_rgba(15,23,42,0.16)] backdrop-blur-[2px] sm:ml-10"
-            labelClassName="text-2xl sm:text-[2.2rem] font-semibold tracking-[-0.03em] text-slate-950"
-          />
-          <HomeActionButton
             label="Play Online"
             onClick={onOnline}
             className="rounded-[1.9rem] border border-cyan-200/50 bg-cyan-50/76 px-6 py-5 text-left shadow-[0_18px_36px_rgba(15,23,42,0.16)] backdrop-blur-[2px] sm:ml-11"
@@ -1656,12 +1638,6 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onFriend
           indicatorClassName="border-rose-300/60 bg-rose-50/95 text-rose-700"
         />
         <HomeActionButton
-          label="Play With Friends"
-          onClick={onFriends}
-          className="rounded-[2rem] border border-sky-200/48 bg-sky-50/78 px-6 py-6 text-left shadow-[0_20px_44px_rgba(15,23,42,0.16)] backdrop-blur-[2px]"
-          labelClassName="text-3xl sm:text-[3rem] font-semibold tracking-[-0.04em] text-slate-950"
-        />
-        <HomeActionButton
           label="Play Online"
           onClick={onOnline}
           className="rounded-[2rem] border border-cyan-200/48 bg-cyan-50/78 px-6 py-6 text-left shadow-[0_20px_44px_rgba(15,23,42,0.16)] backdrop-blur-[2px]"
@@ -1701,12 +1677,6 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onFriend
         labelClassName="text-[1.2rem] sm:text-[1.32rem] tracking-[0.02em] text-white"
       />
       <HomeActionButton
-        label="Play With Friends"
-        onClick={onFriends}
-        className="w-full max-w-[15.75rem] min-h-[56px] rounded-full bg-sky-900/40 p-0 shadow-[0_18px_36px_rgba(15,23,42,0.24)] hover:bg-sky-900/52"
-        labelClassName="text-[1.2rem] sm:text-[1.32rem] tracking-[0.02em] text-white"
-      />
-      <HomeActionButton
         label="Play Online"
         onClick={onOnline}
         className="w-full max-w-[15.75rem] min-h-[56px] rounded-full bg-cyan-900/40 p-0 shadow-[0_18px_36px_rgba(15,23,42,0.24)] hover:bg-cyan-900/52"
@@ -1729,6 +1699,54 @@ const HomeMenuPanel = ({ variantId, onAdventure, onQuickGame, onOnline, onFriend
     </div>
   );
 };
+
+const OnlineModeDialog = ({ onClose, onChooseFriend, onChooseArena }) => (
+  <div onClick={onClose} className="absolute inset-0 z-30 bg-black/82 flex items-start justify-center overflow-y-auto p-4 sm:p-6">
+    <div onClick={(event) => event.stopPropagation()} className="w-full max-w-lg rounded-[1.9rem] border border-slate-800 bg-slate-950 p-5 sm:p-6 text-left my-auto shadow-[0_30px_80px_rgba(0,0,0,0.5)]">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-cyan-200">
+            <Wifi size={18} />
+            <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white">Play Online</h2>
+          </div>
+          <p className="mt-2 text-sm text-slate-400">Choose whether you want to open a private friend room or queue into the arena.</p>
+        </div>
+        <button onClick={onClose} className="w-10 h-10 rounded-2xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all flex items-center justify-center">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+        <button
+          onClick={onChooseFriend}
+          className="rounded-[1.5rem] border border-sky-300/35 bg-sky-500/10 px-5 py-5 text-left transition-colors hover:bg-sky-500/16"
+        >
+          <div className="flex items-center gap-2 text-sky-200">
+            <Users size={18} />
+            <span className="text-[10px] font-black uppercase tracking-[0.18em]">Private Room</span>
+          </div>
+          <div className="mt-3 font-arena-display text-2xl tracking-[0.04em] text-white">Play With Friend</div>
+          <p className="mt-2 text-sm leading-6 text-slate-300">Create or join a direct invite room and start when both players are ready.</p>
+        </button>
+        <button
+          onClick={onChooseArena}
+          className="rounded-[1.5rem] border border-cyan-300/35 bg-cyan-500/10 px-5 py-5 text-left transition-colors hover:bg-cyan-500/16"
+        >
+          <div className="flex items-center gap-2 text-cyan-200">
+            <Wifi size={18} />
+            <span className="text-[10px] font-black uppercase tracking-[0.18em]">Shared Lobby</span>
+          </div>
+          <div className="mt-3 font-arena-display text-2xl tracking-[0.04em] text-white">Play In The Arena</div>
+          <p className="mt-2 text-sm leading-6 text-slate-300">Join the rotating six-hour arena lobby and match with another ready player.</p>
+        </button>
+      </div>
+
+      <button onClick={onClose} className="mt-4 w-full min-h-[52px] rounded-2xl bg-slate-900 hover:bg-slate-800 text-slate-100 font-bold tracking-[0.04em] uppercase transition-colors border border-slate-700">
+        Back
+      </button>
+    </div>
+  </div>
+);
 
 const AdventureMenuPanel = ({
   adventurePathPoints,
@@ -1983,9 +2001,9 @@ const PlayWithFriendsDialog = ({
           <div>
             <div className="flex items-center gap-2 text-cyan-200">
               <Users size={18} />
-              <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white">Play With Friends</h2>
+              <h2 className="font-arena-display text-2xl tracking-[0.08em] text-white">Play Online</h2>
             </div>
-            <p className="mt-2 text-sm text-slate-400">Create a secure invite link, then reconnect automatically if the signal drops.</p>
+            <p className="mt-2 text-sm text-slate-400">Open a private friend room, share the invite, then reconnect automatically if the signal drops.</p>
           </div>
           <button onClick={onClose} className="w-10 h-10 rounded-2xl bg-slate-900 border border-slate-700 text-slate-400 hover:text-white hover:bg-slate-800 transition-all flex items-center justify-center">
             <X size={18} />
@@ -2337,7 +2355,11 @@ const LandingScreen = ({
   onQuickGameOpen,
   onQuickGameClose,
   onQuickGameStart,
-  onFriendsOpen,
+  showOnlineModeDialog,
+  onOpenOnlineModeDialog,
+  onCloseOnlineModeDialog,
+  onChooseOnlineFriend,
+  onChooseOnlineArena,
   onFriendsClose,
   onOnlineOpen,
   onOnlineClose,
@@ -2564,8 +2586,7 @@ const LandingScreen = ({
                     variantId={homeVariant}
                     onAdventure={onAdventureOpen}
                     onQuickGame={onQuickGameOpen}
-                    onOnline={onOnlineOpen}
-                    onFriends={onFriendsOpen}
+                    onOnline={onOpenOnlineModeDialog}
                     onContinue={onContinueGame}
                     canContinue={canContinueGame}
                     onSettings={onOpenSettings}
@@ -2708,6 +2729,13 @@ const LandingScreen = ({
       )}
 
       {showQuickGameDialog && <QuickGameDialog selectedDifficulty={selectedDifficulty} onClose={onQuickGameClose} onStart={onQuickGameStart} />}
+      {showOnlineModeDialog && (
+        <OnlineModeDialog
+          onClose={onCloseOnlineModeDialog}
+          onChooseFriend={onChooseOnlineFriend}
+          onChooseArena={onChooseOnlineArena}
+        />
+      )}
       {showOnlineDialog && (
         <PlayOnlineDialog
           playerName={onlinePlayerName}
@@ -2771,6 +2799,7 @@ export default function App() {
   const [showMenuSettings, setShowMenuSettings] = useState(false);
   const [showRivalMenu, setShowRivalMenu] = useState(false);
   const [showQuickGameDialog, setShowQuickGameDialog] = useState(false);
+  const [showOnlineModeDialog, setShowOnlineModeDialog] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [dandanCastConfirm, setDandanCastConfirm] = useState(null);
@@ -4390,6 +4419,7 @@ export default function App() {
   };
 
   const handleOpenOnlineDialog = () => {
+    setShowOnlineModeDialog(false);
     updatePeerUi((current) => ({ ...current, open: false, error: '', note: current.note }));
     updateOnlineUi((current) => ({
       ...current,
@@ -4399,10 +4429,28 @@ export default function App() {
   };
 
   const handleCloseOnlineDialog = () => {
+    setShowOnlineModeDialog(false);
     updateOnlineUi((current) => ({
       ...current,
       open: false
     }));
+  };
+
+  const handleOpenOnlineModeDialog = () => {
+    updatePeerUi((current) => ({ ...current, open: false, error: '', note: current.note }));
+    updateOnlineUi((current) => ({ ...current, open: false, error: '', note: current.note }));
+    setShowOnlineModeDialog(true);
+  };
+
+  const handleOpenFriendDialog = () => {
+    setShowOnlineModeDialog(false);
+    updateOnlineUi((current) => ({ ...current, open: false }));
+    updatePeerUi({
+      open: true,
+      mode: peerUi.joinRoomId && peerUi.joinToken ? 'join' : 'host',
+      error: '',
+      note: peerUi.note
+    });
   };
 
   const handleCancelOnlineMatchmaking = () => {
@@ -4630,6 +4678,7 @@ export default function App() {
         onOpenLibrary={() => setViewingZone('deck')}
         onCloseLibrary={() => setViewingZone(null)}
         showQuickGameDialog={showQuickGameDialog}
+        showOnlineModeDialog={showOnlineModeDialog}
         showFriendsDialog={peerUi.open}
         showOnlineDialog={onlineUi.open}
         selectedDifficulty={selectedDifficulty}
@@ -4637,11 +4686,12 @@ export default function App() {
         onQuickGameOpen={() => setShowQuickGameDialog(true)}
         onQuickGameClose={() => setShowQuickGameDialog(false)}
         onQuickGameStart={handleStartQuickGame}
-        onFriendsOpen={() => {
-          updateOnlineUi((current) => ({ ...current, open: false }));
-          updatePeerUi({ open: true, mode: peerUi.joinRoomId && peerUi.joinToken ? 'join' : 'host', error: '', note: peerUi.note });
-        }}
+        onOpenOnlineModeDialog={handleOpenOnlineModeDialog}
+        onCloseOnlineModeDialog={() => setShowOnlineModeDialog(false)}
+        onChooseOnlineFriend={handleOpenFriendDialog}
+        onChooseOnlineArena={handleOpenOnlineDialog}
         onFriendsClose={() => {
+          setShowOnlineModeDialog(false);
           if (peerUi.role && !state.started) {
             disconnectPeerSession({ notifyRemote: peerUi.role === 'host', resetGame: false, keepDialog: false, note: 'Friend match closed.' });
             return;
