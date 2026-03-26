@@ -3396,7 +3396,7 @@ export default function App() {
     preloadImageUrls(APP_PRELOAD_URLS);
   }, []);
   useEffect(() => {
-    if (state.gameMode !== 'peer' || !state.started) {
+    if (state.gameMode !== 'peer' || !state.started || state.winner) {
       peerClockRef.current = null;
       setPeerClock(null);
       return;
